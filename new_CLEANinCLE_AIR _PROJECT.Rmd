@@ -1,0 +1,216 @@
+---
+title: "new_CLEANinCLE_PROJECT"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+# Load required libraries
+library(tidyverse)
+library(lubridate)
+library(janitor)
+
+# Load your data
+data <- read_csv("~/research/Data/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv") 
+
+# View dimensions
+dim(data)
+
+# View data types
+str(data)
+
+# View column names
+colnames(data)
+
+# View first few rows
+head(data)
+
+```
+
+## 
+
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(readr)
+library(lubridate)
+
+data_clean <- read_csv("~/research/Data/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
+
+# Rename for simplicity
+data_clean <- data_clean %>%
+  rename(
+    datetime = time,
+    location = location_name,
+    lat = latitude,
+    lon = longitude,
+    device_id = device_eui,
+    measurement_type = measure_name
+  )
+
+# Pivot to wide format
+data_wide <- data_clean %>%
+  pivot_wider(
+    id_cols = c(datetime, location, lat, lon, device_id),
+    names_from = measurement_type,
+    values_from = value
+  )
+
+# Convert datetime to POSIXct and then to Julian
+
+
+data_wide <- data_wide %>%
+  mutate(
+    datetime_parsed = as.POSIXct(datetime, format = "%Y-%m-%d %H:%M:%S", tz = "UTC"),
+    julian_day = as.numeric(datetime_parsed) / 86400 + 2440587.5,
+    julian_day_str = formatC(julian_day, format = "f", digits = 3)
+  )
+head(data_wide) # %>% select(datetime, julian_day, julian_day_str))
+```
+
+```{r}
+device_locations <- data_wide %>%
+  group_by(device_id) %>%
+  summarize(unique_locations = n_distinct(location)) %>%
+  arrange(desc(unique_locations))
+
+print(device_locations)
+
+data_wide <- data_wide %>%
+  group_by(device_id, location) %>%
+  mutate(device_labeled = paste0(device_id, ".", row_number())) %>%
+  ungroup()
+```
+
+```{r}
+library (dplyr)
+library (readr)
+
+# Load your data
+data <- read_csv("~/research/Data/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
+
+# Count number of unique locations (lat, lon) per device_number
+location_counts <- data %>%
+  select(device_number, latitude, longitude) %>%
+  distinct() %>%
+  group_by(device_number) %>%
+  summarise(unique_locations = n())
+
+# View the result
+print(location_counts)
+
+library(dplyr)
+
+device_location_counts <- data %>%
+  distinct(device_number, latitude, longitude) %>%
+  group_by(device_number) %>%
+  summarise(locations_used = n()) %>%
+  arrange(desc(locations_used))
+
+print(device_location_counts)
+```
+
+
+```{r}
+library(dplyr)
+
+# Create a new column that uniquely labels devices per location
+data_labeled <- data %>%
+  group_by(device_number, latitude, longitude) %>%
+  mutate(device_labeled = paste0(device_number, ".", cur_group_id())) %>%
+  ungroup()
+
+# View the first few rows
+head(data_labeled)
+```
+
+```{r}
+library(dplyr)
+library(lubridate)
+
+# Convert time column to POSIXct if not already
+data <- data %>%
+  mutate(time = ymd_hms(time))
+
+# Assign rolling group IDs based on time gap > 1 hour for each device
+data <- data %>%
+  arrange(device_number, time) %>%
+  group_by(device_number) %>%
+  mutate(
+    time_diff = as.numeric(difftime(time, lag(time), units = "hours")),
+    group_id = cumsum(is.na(time_diff) | time_diff > 1)
+  ) %>%
+  ungroup()
+
+# View the result
+head(data)
+
+
+
+library(ggplot2)
+library(scales)
+library(lubridate)
+
+ggplot(data_wide_sorted, aes(x = datetime, y = mc_pm2_5)) +
+  geom_line(color = "steelblue") +
+  scale_x_datetime(
+    date_breaks = "1 month",
+    date_labels = "%b",  # abbreviated month names (e.g. Jan, Feb)
+    expand = c(0.01, 0.01),
+    sec.axis = dup_axis(
+      labels = function(x) ifelse(month(x) == 1 | x == min(x), year(x), ""),
+      name = NULL
+    )
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(vjust = 1),
+    axis.ticks.length = unit(5, "pt"),
+    axis.text.x.top = element_text(margin = margin(b = 10)),
+    axis.ticks.x.top = element_line()
+  ) +
+  labs(
+    x = NULL,
+    y = expression("PM"[2.5]*" (µg/m³)"),
+    title = "Time Series of PM2.5 from Nov 2024 to May 2025"
+  )
+
+library(ggplot2)
+library(scales)
+library(lubridate)
+
+ggplot(data_wide_sorted, aes(x = datetime, y = mc_pm2_5)) +
+  geom_line(color = "steelblue") +
+  scale_x_datetime(
+    date_breaks = "1 month",
+    date_labels = "%b",  # abbreviated month names (e.g. Jan, Feb)
+    expand = c(0.01, 0.01),
+    sec.axis = dup_axis(
+      labels = function(x) ifelse(month(x) == 1 | x == min(x), year(x), ""),
+      name = NULL
+    )
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(vjust = 1),
+    axis.ticks.length = unit(5, "pt"),
+    axis.text.x.top = element_text(margin = margin(b = 10)),
+    axis.ticks.x.top = element_line()
+  ) +
+  labs(
+    x = NULL,
+    y = expression("PM"[2.5]*" (µg/m³)"),
+    title = "Time Series of PM2.5 from Nov 2024 to May 2025"
+  )
+
+```
+
+
