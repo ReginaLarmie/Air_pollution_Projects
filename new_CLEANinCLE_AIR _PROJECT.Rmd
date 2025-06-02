@@ -17,7 +17,7 @@ library(lubridate)
 library(janitor)
 
 # Load your data
-data <- read_csv("~/research/Data/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv") 
+data <- read_csv("~/R_Projects/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
 
 # View dimensions
 dim(data)
@@ -43,7 +43,7 @@ library(tidyr)
 library(readr)
 library(lubridate)
 
-data_clean <- read_csv("~/research/Data/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
+data_clean <- read_csv("~/R_Projects/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
 
 # Rename for simplicity
 data_clean <- data_clean %>%
@@ -95,7 +95,7 @@ library (dplyr)
 library (readr)
 
 # Load your data
-data <- read_csv("~/research/Data/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
+data <- read_csv("~/R_Projects/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
 
 # Count number of unique locations (lat, lon) per device_number
 location_counts <- data %>%
