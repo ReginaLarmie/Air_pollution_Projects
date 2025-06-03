@@ -1,0 +1,283 @@
+---
+title: "new_CLEANinCLE_AIR_QUALITY"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+# Load required libraries
+library(tidyverse)
+library(lubridate)
+library(janitor)
+library(dplyr)
+library(tidyr)
+library(readr)
+
+
+# Load your data
+data <- read_csv("~/research/Data/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv") 
+
+# View dimensions
+dim(data)
+
+# View data types
+str(data)
+
+# View column names
+colnames(data)
+
+# View first few rows
+head(data)
+```
+
+```{r}
+
+data_clean <- read_csv("~/research/Data/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
+
+# Rename for simplicity
+data_clean <- data_clean %>%
+  rename(
+    datetime = time,
+    location = location_name,
+    lat = latitude,
+    lon = longitude,
+    device_id = device_eui,
+    measurement_type = measure_name
+  )
+
+# Pivot to wide format
+data_wide <- data_clean %>%
+  pivot_wider(
+    id_cols = c(datetime, location, lat, lon, device_id),
+    names_from = measurement_type
+    values_from = value
+  )
+
+# Convert datetime to POSIXct and then to Julian
+
+
+data_wide <- data_wide %>%
+  mutate(
+    datetime_parsed = as.POSIXct(datetime, format = "%Y-%m-%d %H:%M:%S", tz = "UTC"),
+    julian_day = as.numeric(datetime_parsed) / 86400 + 2440587.5,
+    julian_day_str = formatC(julian_day, format = "f", digits = 3)
+  )
+head(data_wide) # %>% select(datetime, julian_day, julian_day_str))
+
+```
+
+```{r}
+device_locations <- data_wide %>%
+  group_by(device_id) %>%
+  summarize(unique_locations = n_distinct(location)) %>%
+  arrange(desc(unique_locations))
+
+print(device_locations)
+
+data_wide <- data_wide %>%
+  group_by(device_id, location) %>%
+  mutate(device_labeled = paste0(device_id, ".", row_number())) %>%
+  ungroup()
+```
+
+```{r}
+library (dplyr)
+library (readr)
+
+# Load your data
+data <- read_csv("~/research/Data/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
+
+# Count number of unique locations (lat, lon) per device_number
+location_counts <- data %>%
+  select(device_number, latitude, longitude) %>%
+  distinct() %>%
+  group_by(device_number) %>%
+  summarise(unique_locations = n())
+
+# View the result
+print(location_counts)
+
+library(dplyr)
+
+device_location_counts <- data %>%
+  distinct(device_number, latitude, longitude) %>%
+  group_by(device_number) %>%
+  summarise(locations_used = n()) %>%
+  arrange(desc(locations_used))
+
+print(device_location_counts)
+
+
+# Create a new column that uniquely labels devices per location
+data_labeled <- data %>%
+  group_by(device_number, latitude, longitude) %>%
+  mutate(device_labeled = paste0(device_number, ".", cur_group_id())) %>%
+  ungroup()
+
+# View the first few rows
+head(data_labeled)
+```
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(scales)
+
+# Convert time column to POSIXct if not already
+data <- data %>%
+  mutate(time = ymd_hms(time))
+
+# Assign rolling group IDs based on time gap > 1 hour for each device
+data <- data %>%
+  arrange(device_number, time) %>%
+  group_by(device_number) %>%
+  mutate(
+    time_diff = as.numeric(difftime(time, lag(time), units = "hours")),
+    group_id = cumsum(is.na(time_diff) | time_diff > 1)
+  ) %>%
+  ungroup()
+
+# View the result
+head(data)
+
+
+library(ggplot2)
+library(scales)
+library(lubridate)
+
+# Make sure your data is sorted by datetime
+data_wide_sorted <- data_wide %>%
+  arrange(datetime)
+
+# Plot PM2.5 over time
+ggplot(data_wide_sorted, aes(x = datetime, y = mc_pm2_5)) +
+  geom_line(color = "steelblue") +
+  scale_x_datetime(
+    date_breaks = "1 month",
+    date_labels = "%b"  # Jan, Feb, etc.
+  ) +
+  labs(
+    title = "Time Series of PM2.5 from Nov 2024 to May 2025",
+    x = "Date",
+    y = expression("PM"[2.5]*" (µg/m³)")
+  ) +
+  theme_minimal()
+
+```
+
+```{r}
+# Extract unique location and device info
+loc <- unique(data$location_name)
+dev <- unique(data$device_number)
+
+# Use the first (or specific) value if there are multiple
+subtitle_text <- paste("Location:", loc[1], "| Device Number:", dev[1])
+
+# Plot with subtitle
+ggplot(data_wide_sorted, aes(x = datetime, y = mc_pm2_5)) +
+  geom_line(color = "steelblue") +
+  scale_x_datetime(
+    date_breaks = "1 month",
+    date_labels = "%b",
+    expand = c(0.01, 0.01),
+    sec.axis = dup_axis(
+      labels = function(x) ifelse(month(x) == 1 | x == min(x), year(x), ""),
+      name = NULL
+    )
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(vjust = 1),
+    axis.ticks.length = unit(5, "pt"),
+    axis.text.x.top = element_text(margin = margin(b = 10)),
+    axis.ticks.x.top = element_line()
+  ) +
+  labs(
+    x = NULL,
+    y = expression("PM"[2.5]*" (µg/m³)"),
+    title = "Time Series of PM2.5 from Nov 2024 to May 2025",
+    subtitle = subtitle_text
+  )
+
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(lubridate)
+
+# === Make sure your datetime column is in POSIXct format ===
+data_wide <- data_wide %>%
+  mutate(datetime_parsed = as.POSIXct(datetime_parsed))  # skip this if already POSIXct
+
+# === Get unique devices ===
+device_list <- unique(data_wide$device_id)
+
+# === Loop over each device and save two plots ===
+for (dev in device_list) {
+  subset_data <- data_wide %>% filter(device_id == dev)
+  location_name <- unique(subset_data$location)[1]  # take the first location
+
+  # 1. Full Y-Axis View
+  p1 <- ggplot(subset_data, aes(x = datetime_parsed, y = mc_pm2_5)) +
+    geom_line(color = "steelblue", linewidth = 0.3) +
+    scale_x_datetime(date_breaks = "1 month", date_labels = "%b") +
+    labs(
+      title = "PM2.5 Time Series from Nov 2024 to May 2025",
+      subtitle = paste("Location:", location_name, "| Device:", dev),
+      x = "Date", y = expression("PM"[2.5]*" (µg/m³)")
+    ) +
+    theme_minimal()
+
+  # 2. Zoomed View (Y-Axis 0 to 200)
+  p2 <- ggplot(subset_data, aes(x = datetime_parsed, y = mc_pm2_5)) +
+    geom_line(color = "darkorange", linewidth = 0.3) +
+    scale_x_datetime(date_breaks = "1 month", date_labels = "%b") +
+    ylim(0, 200) +
+    labs(
+      title = "Zoomed PM2.5 Time Series (0-200 µg/m³)",
+      subtitle = paste("Location:", location_name, "| Device:", dev),
+      x = "Date", y = expression("PM"[2.5]*" (µg/m³)")
+    ) +
+    theme_minimal()
+
+  # === Print or save ===
+  print(p1)
+  print(p2)
+}
+
+
+```
+
+
+```{r}
+# Filter only rows with valid PM2.5 values
+filtered_data <- data_wide %>%
+  filter(!is.na(mc_pm2_5))
+
+# Plot grid: each panel = one device/location
+ggplot(filtered_data, aes(x = datetime_parsed, y = mc_pm2_5)) +
+  geom_line(color = "steelblue", linewidth = 0.3) +
+  facet_wrap(~ paste("Device:", device_id, "\n", location), ncol = 3) +
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b") +
+  ylim(0, 200) +
+  labs(
+    title = "PM2.5 Time Series by Device (Zoomed View)",
+    x = "Date", y = expression("PM"[2.5]*" (µg/m³)")
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
