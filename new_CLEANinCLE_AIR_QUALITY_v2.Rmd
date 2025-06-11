@@ -40,6 +40,10 @@ colnames(data)
 head(data)
 ```
 
+# Data Cleaning
+
+Rename key columns for clarity and convert the data from long to wide format so that each measurement type (e.g., PM2.5, CO2) becomes its own column.
+
 ```{r}
 
 data_clean <- read_csv("~/research/Data/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
@@ -76,6 +80,11 @@ head(data_wide) # %>% select(datetime, julian_day, julian_day_str))
 
 ```
 
+
+# Locations Per Device
+
+Analyzing how many unique locations each air quality device was deployed to.
+
 ```{r}
 device_locations <- data_wide %>%
   group_by(device_id) %>%
@@ -89,6 +98,9 @@ data_wide <- data_wide %>%
   mutate(device_labeled = paste0(device_id, ".", row_number())) %>%
   ungroup()
 ```
+
+
+# Alternative Location Count with device_number
 
 ```{r}
 library (dplyr)
@@ -127,6 +139,11 @@ data_labeled <- data %>%
 # View the first few rows
 head(data_labeled)
 ```
+# Exploratory Data Analyses
+
+Time Series Plot of PM2.5
+
+A line plot showing PM2.5 concentration trends over time.
 
 ```{r}
 library(dplyr)
@@ -176,6 +193,8 @@ ggplot(data_wide_sorted, aes(x = datetime, y = mc_pm2_5)) +
 
 ```
 
+#Time Series with Device and Location Subtitle
+
 ```{r}
 # Extract unique location and device info
 loc <- unique(data$location_name)
@@ -212,6 +231,10 @@ ggplot(data_wide_sorted, aes(x = datetime, y = mc_pm2_5)) +
 
 ```
 
+
+# Alternative Time Series Plot of PM2.5
+
+A line plot showing PM2.5 concentration trends over time.
 ```{r}
 library(dplyr)
 library(ggplot2)
@@ -260,6 +283,7 @@ for (dev in device_list) {
 
 
 ```
+
 
 
 ```{r}

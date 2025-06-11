@@ -17,7 +17,7 @@ library(lubridate)
 library(janitor)
 
 # Load your data
-data <- read_csv("~/research/Data/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv") 
+data <- read_csv("~/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv") 
 
 # View dimensions
 dim(data)
@@ -43,7 +43,7 @@ library(tidyr)
 library(readr)
 library(lubridate)
 
-data_clean <- read_csv("~/research/Data/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
+data_clean <- read_csv("~/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
 
 # Rename for simplicity
 data_clean <- data_clean %>%
@@ -95,7 +95,7 @@ library (dplyr)
 library (readr)
 
 # Load your data
-data <- read_csv("~/research/Data/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
+data <- read_csv("~/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
 
 # Count number of unique locations (lat, lon) per device_number
 location_counts <- data %>%
@@ -120,6 +120,10 @@ print(device_location_counts)
 
 
 ```{r}
+# Sort data_wide by datetime and store in a new variable
+data_wide_sorted <- data_wide %>%
+  arrange(datetime)
+
 library(dplyr)
 
 # Create a new column that uniquely labels devices per location
@@ -211,6 +215,40 @@ ggplot(data_wide_sorted, aes(x = datetime, y = mc_pm2_5)) +
     title = "Time Series of PM2.5 from Nov 2024 to May 2025"
   )
 
+```
+```{r}
+# Extract unique location and device info
+loc <- unique(data$location_name)
+dev <- unique(data$device_number)
+
+# Use the first (or specific) value if there are multiple
+subtitle_text <- paste("Location:", loc[1], "| Device Number:", dev[1])
+
+# Plot with subtitle
+ggplot(data_wide_sorted, aes(x = datetime, y = mc_pm2_5)) +
+  geom_line(color = "steelblue") +
+  scale_x_datetime(
+    date_breaks = "1 month",
+    date_labels = "%b",
+    expand = c(0.01, 0.01),
+    sec.axis = dup_axis(
+      labels = function(x) ifelse(month(x) == 1 | x == min(x), year(x), ""),
+      name = NULL
+    )
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(vjust = 1),
+    axis.ticks.length = unit(5, "pt"),
+    axis.text.x.top = element_text(margin = margin(b = 10)),
+    axis.ticks.x.top = element_line()
+  ) +
+  labs(
+    x = NULL,
+    y = expression("PM"[2.5]*" (µg/m³)"),
+    title = "Time Series of PM2.5 from Nov 2024 to May 2025",
+    subtitle = subtitle_text
+  )
 ```
 
 

@@ -1,0 +1,850 @@
+---
+title: "new_EPA"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+# Load required packages
+library(RAQSAPI)
+library(purrr)
+library(readr)
+
+# EPA credentials
+aqs_credentials(username = "rnl34@case.edu", key = "copperhawk19")
+
+# Vector of site numbers 
+site_numbers <- c("0034", "0038", "0045", "0060", "0065")  
+
+# Define date range
+start_date <- as.Date("2024-11-01")
+end_date   <- as.Date("2025-05-01")
+
+# Loop through and download data for each site
+epa_data_list <- map(site_numbers, function(site) {
+  aqs_sampledata_by_site(
+    parameter = "88101",              # PM2.5
+    bdate = start_date,
+    edate = end_date,
+    stateFIPS = "39",                 # Ohio
+    countycode = "035",               # Cuyahoga
+    sitenum = site,
+    return_header = FALSE
+  )
+})
+
+# Assign a name to each element that is its site number
+names(epa_data_list) <- site_numbers
+
+# View one dataset (site "0060")
+head(epa_data_list[["0060"]])
+
+#Save each to its own CSV file
+walk2(epa_data_list, names(epa_data_list), ~ write_csv(.x, paste0("epa_pm25_site_", .y, ".csv")))
+```
+
+```{r}
+
+# Combine All Sites' Data and Assess NA Distribution
+
+library(dplyr)
+
+# Combine all site data into one tibble for inspection
+epa_all_data <- bind_rows(epa_data_list, .id = "site_number")
+
+# Count NA values in each column
+na_counts <- sapply(epa_all_data, function(col) sum(is.na(col)))
+na_counts <- sort(na_counts, decreasing = TRUE)
+
+# Display NA counts per column
+na_counts
+
+# Identifing Columns Where Most Values Are NA
+
+# Total number of rows
+total_rows <- nrow(epa_all_data)
+
+# Threshold: show columns where fewer than 5% of rows are NOT NA
+mostly_na_cols <- names(na_counts[na_counts > 0 & na_counts < total_rows * 0.05])
+
+# View summary of those columns
+epa_all_data %>%
+  select(all_of(mostly_na_cols)) %>%
+  summary()
+```
+
+```{r}
+
+
+```
+#  Combine All EPA Site Data into One Data Frame
+```{r}
+
+library(dplyr)
+
+# Combine all site data into one data frame
+epa_all_sites_raw <- bind_rows(epa_data_list, .id = "site_number")  # The .id is unnecessary
+
+# Filter to Keep Only PM2.5 1-HOUR Measurements
+epa_1hr_clean <- epa_all_sites_raw %>%
+  filter(sample_duration == "1 HOUR", !is.na(sample_measurement)) %>%
+  mutate(
+    datetime_local = as.POSIXct(paste(date_local, time_local),
+                                format = "%Y-%m-%d %H:%M",
+                                tz = "America/New_York"),
+    date = as.Date(datetime_local)
+  )
+
+# Preview the Cleaned 1-Hour Data
+glimpse(epa_1hr_clean)
+```
+
+```{r}
+
+# Count Number of NA Values in Each Column
+
+na_counts_1hr <- sapply(epa_1hr_clean, function(col) sum(is.na(col)))
+na_counts_1hr <- sort(na_counts_1hr, decreasing = TRUE)
+
+# View number of NA values per column
+na_counts_1hr
+
+```
+# Calculate Daily Averages by Site
+```{r}
+epa_1hr_daily_avg <- epa_1hr_clean %>%
+  group_by(site_number, date) %>%
+  summarise(daily_avg_pm25 = mean(sample_measurement, na.rm = TRUE), .groups = "drop")
+
+
+# Daily PM2.5 Trend for All Sites
+library(ggplot2)
+library(dplyr)
+
+# Create plots for each site
+unique_sites <- unique(epa_1hr_daily_avg$site_number)
+
+for (site in unique_sites) {
+  site_data <- epa_1hr_daily_avg %>% filter(site_number == site)
+
+  p <- ggplot(site_data, aes(x = date, y = daily_avg_pm25)) +
+    geom_line(color = "steelblue", linewidth = 0.6) +
+    labs(
+      title = paste("Daily Average PM2.5 (1-Hour Data) - Site", site),
+      x = "Date",
+      y = expression("PM"[2.5]*" (µg/m³)")
+    ) +
+    scale_x_date(date_breaks = "1 month", date_labels = "%b\n%Y") +
+    theme_minimal(base_size = 13)
+
+  print(p)  # Show the plot
+
+  # Optionally save
+  ggsave(filename = paste0("pm25_daily_avg_site_", site, ".png"), plot = p, width = 8, height = 4.5)
+}
+```
+
+
+
+```{r}
+library(readr)
+library(dplyr)
+library(lubridate)
+
+# Vector of site numbers
+site_numbers <- c("0034", "0038", "0045", "0060", "0065")
+
+# Read and combine all 24-hour data files
+epa_24hr_clean <- bind_rows(
+  lapply(site_numbers, function(site) {
+    read_csv(paste0("epa_pm25_site_", site, ".csv")) %>%
+      filter(sample_duration == "24 HOUR") %>%
+      mutate(
+        site_number = site,
+        date = as.Date(date_local),
+        pm25 = sample_measurement
+      ) %>%
+      select(site_number, date, pm25)
+  })
+)
+
+library(ggplot2)
+
+unique_sites_24hr <- unique(epa_24hr_clean$site_number)
+
+for (site in unique_sites_24hr) {
+  site_data <- epa_24hr_clean %>% filter(site_number == site)
+
+  p <- ggplot(site_data, aes(x = date, y = pm25)) +
+    geom_line(color = "firebrick", linewidth = 0.6) +
+    labs(
+      title = paste("Daily PM2.5 (24-Hour Sample) - Site", site),
+      x = "Date",
+      y = expression("PM"[2.5]*" (µg/m³)")
+    ) +
+    scale_x_date(date_breaks = "1 month", date_labels = "%b\n%Y") +
+    theme_minimal(base_size = 13)
+
+  print(p)
+  ggsave(filename = paste0("pm25_24hr_site_", site, ".png"), plot = p, width = 8, height = 4.5)
+}
+```
+
+
+```{r}
+
+# Count number of NA values in each column
+
+na_counts_24hr <- sapply(epa_24hr_clean, function(col) sum(is.na(col)))
+na_counts_24hr <- sort(na_counts_24hr, decreasing = TRUE)
+
+# View NA count result
+na_counts_24hr
+
+# Step 6: Identify mostly NA columns
+
+n_rows_24hr <- nrow(epa_24hr_clean)
+
+# Threshold: Keep columns where fewer than 5% of values are not NA
+mostly_na_cols_24hr <- names(na_counts_24hr[na_counts_24hr > 0 & na_counts_24hr < 0.05 * n_rows_24hr])
+
+# View summary of those mostly NA columns
+
+epa_24hr_clean %>%
+  select(all_of(mostly_na_cols_24hr)) %>%
+  summary()
+```
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(readr)
+
+# Loop over each site
+for (site in site_numbers) {
+  
+  # Load data
+  data <- read_csv(paste0("epa_pm25_site_", site, ".csv"))
+  
+  # Prepare 1-hour data: group and average by date
+  hourly_avg <- data %>%
+    filter(sample_duration == "1 HOUR", !is.na(sample_measurement)) %>%
+    mutate(date = as.Date(date_local)) %>%
+    group_by(date) %>%
+    summarise(pm25_1hr_avg = mean(sample_measurement, na.rm = TRUE), .groups = "drop")
+  
+  # Prepare 24-hour data
+  daily_data <- data %>%
+    filter(sample_duration == "24 HOUR", !is.na(sample_measurement)) %>%
+    mutate(date = as.Date(date_local)) %>%
+    select(date, pm25_24hr = sample_measurement)
+  
+  # Join both datasets by date
+  comparison_df <- left_join(hourly_avg, daily_data, by = "date") %>%
+    filter(!is.na(pm25_1hr_avg), !is.na(pm25_24hr))  # Keep only rows with both values
+  
+  # Plot X-Y scatter
+  p <- ggplot(comparison_df, aes(x = pm25_24hr, y = pm25_1hr_avg)) +
+    geom_point(color = "steelblue", alpha = 0.7) +
+    geom_smooth(method = "lm", se = FALSE, linetype = "dashed", color = "darkred") +
+    labs(
+      title = paste("EPA: 1-Hour Avg vs 24-Hour PM2.5 (Site", site, ")"),
+      x = expression("24-Hour PM"[2.5]*" (µg/m³)"),
+      y = expression("Daily Avg of 1-Hour PM"[2.5]*" (µg/m³)")
+    ) +
+    theme_minimal(base_size = 13)
+  
+  print(p)
+}
+
+```
+
+# Loading CLEANinCLE Data for PM2.5
+```{r}
+library(readr)
+library(dplyr)
+library(lubridate)
+
+# Load CLEANinCLE raw data
+cleanincle_data <- read_csv("~/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
+
+# Convert time column and filter for PM2.5 values
+cleanincle_data <- cleanincle_data %>%
+  filter(measure_name == "mc_pm2_5", !is.na(value)) %>%
+  mutate(
+    datetime = as.POSIXct(time, format = "%Y-%m-%d %H:%M:%S", tz = "America/New_York"),
+    date = as.Date(datetime)
+  )
+
+# Preview the cleaned data
+glimpse(cleanincle_data)
+```
+
+# Daily average PM2.5 from the optical sensor data.
+```{r}
+# Daily average PM2.5 values from CLEANinCLE
+cleanincle_daily_avg <- cleanincle_data %>%
+  group_by(date) %>%
+  summarise(pm25_avg = mean(value, na.rm = TRUE)) %>%
+  ungroup()
+```
+
+# Merging CLEANinCLE and EPA data by date.
+```{r}
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(lubridate)
+
+# Vector of EPA site numbers
+site_numbers <- c("0034", "0038", "0045", "0060", "0065")
+
+# Step 1: Calculate CLEANinCLE daily average
+cleanincle_daily_avg <- cleanincle_data %>%
+  group_by(date) %>%
+  summarise(pm25_cleanincle = mean(value, na.rm = TRUE), .groups = "drop")
+
+# Step 2: Loop through each site and create comparison plot
+for (site in site_numbers) {
+  # Filter EPA data for this site
+  epa_24hr_site <- epa_24hr_clean %>%
+    filter(site_number == site) %>%
+    select(date, pm25_epa = pm25)
+
+  # Join CLEANinCLE with EPA data on date
+  comparison_df <- inner_join(cleanincle_daily_avg, epa_24hr_site, by = "date")
+
+  # Plot comparison
+  p <- ggplot(comparison_df, aes(x = pm25_cleanincle, y = pm25_epa)) +
+    geom_point(color = "steelblue", size = 2, alpha = 0.75) +
+    geom_smooth(method = "lm", se = FALSE, color = "red", linewidth = 0.8) +
+    labs(
+      title = paste("Daily PM2.5 Comparison: CLEANinCLE vs EPA 24-Hour (Site", site, ")"),
+      x = "CLEANinCLE Daily Avg PM2.5 (µg/m³)",
+      y = "EPA 24-Hour PM2.5 (µg/m³)"
+    ) +
+    theme_minimal(base_size = 13)
+
+  print(p)
+
+  # Optionally save plot
+  ggsave(
+    filename = paste0("pm25_comparison_cleanincle_epa_site_", site, ".png"),
+    plot = p,
+    width = 8, height = 5
+  )
+}
+```
+
+
+# 5×5 grid of scatter plots comparing EPA 24-hour PM2.5 data across all sites:
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(tidyr)
+library(readr)
+
+# Compute average PM2.5 per site per day 
+epa_24hr_clean_avg <- epa_24hr_clean %>%
+  group_by(site_number, date) %>%
+  summarise(pm25 = mean(pm25, na.rm = TRUE), .groups = "drop")
+
+#  Reshape data from long to wide format
+epa_24hr_wide <- epa_24hr_clean_avg %>%
+  pivot_wider(names_from = site_number, values_from = pm25)
+
+# Rename site columns for easier plotting labels
+names(epa_24hr_wide)[-1] <- paste0("Site_", names(epa_24hr_wide)[-1])
+
+# Filter out rows with 3 or more missing site values
+epa_24hr_wide_clean <- epa_24hr_wide %>%
+  filter(rowSums(is.na(.)) < 3)
+
+# Convert all site columns to numeric to avoid errors in ggpairs
+epa_24hr_wide_clean_numeric <- epa_24hr_wide_clean %>%
+  mutate(across(-date, as.numeric))
+
+# Load GGally for ggpairs function
+library(GGally)
+
+# Plot using ggpairs (excluding the date column)
+ggpairs(
+  data = epa_24hr_wide_clean_numeric[, -1],  # drop the 'date' column
+  title = "EPA 24-Hour PM2.5: Site-to-Site Comparison",
+  upper = list(continuous = wrap("points", alpha = 0.6, size = 0.8)),
+  diag  = list(continuous = wrap("densityDiag", alpha = 0.4)),
+  lower = list(continuous = wrap("smooth", alpha = 0.6, size = 0.6))
+)
+```
+
+
+# 5×5 grid of scatter plots using the optical sensor (1-hour) daily averages from EPA data:
+```{r}
+# Load required libraries
+library(dplyr)
+library(tidyr)
+library(GGally)
+library(readr)
+
+# Compute daily average PM2.5 for each site from 1-hour data
+epa_1hr_daily <- epa_1hr_clean %>%
+  group_by(site_number, date) %>%
+  summarise(pm25 = mean(sample_measurement, na.rm = TRUE), .groups = "drop")
+
+# Reshape to wide format: each site in its own column
+epa_1hr_wide <- epa_1hr_daily %>%
+  pivot_wider(names_from = site_number, values_from = pm25, values_fn = mean)  
+
+# Rename columns for clarity
+names(epa_1hr_wide)[-1] <- paste0("Site_", names(epa_1hr_wide)[-1])
+
+# Remove rows with too many missing values (optional)
+epa_1hr_wide_clean <- epa_1hr_wide %>%
+  filter(rowSums(is.na(.)) < 3)
+
+# Convert all site columns to numeric
+epa_1hr_wide_clean <- epa_1hr_wide_clean %>%
+  mutate(across(-date, ~ as.numeric(unlist(.))))
+
+# Generate the 5×5 scatterplot matrix
+ggpairs(
+  data = epa_1hr_wide_clean[, -1],  # Remove date column
+  upper = list(continuous = wrap("points", alpha = 0.6, size = 1)),
+  lower = list(continuous = wrap("smooth", alpha = 0.6, size = 0.8)),
+  diag = list(continuous = wrap("densityDiag", alpha = 0.4))
+)
+```
+
+```{r}
+# Load libraries
+library(dplyr)
+library(tidyr)
+library(GGally)
+library(readr)
+library(lubridate)
+
+# STEP 1: Load and combine EPA data for all sites (if not already done)
+site_numbers <- c("0034", "0038", "0045", "0060", "0065")
+
+epa_1hr_clean <- bind_rows(
+  lapply(site_numbers, function(site) {
+    read_csv(paste0("epa_pm25_site_", site, ".csv")) %>%
+      filter(sample_duration == "1 HOUR", !is.na(sample_measurement)) %>%
+      mutate(
+        site_number = site,
+        datetime = as.POSIXct(paste(date_local, time_local), format = "%Y-%m-%d %H:%M", tz = "America/New_York"),
+        date = as.Date(datetime)
+      ) %>%
+      group_by(site_number, date) %>%
+      summarise(pm25 = mean(sample_measurement, na.rm = TRUE), .groups = "drop")
+  })
+)
+
+# STEP 2: Reshape to wide format
+epa_1hr_wide <- epa_1hr_clean %>%
+  pivot_wider(names_from = site_number, values_from = pm25, values_fn = mean)
+
+# STEP 3: Rename columns for clarity
+names(epa_1hr_wide)[-1] <- paste0("Site_", names(epa_1hr_wide)[-1])
+
+# STEP 4: Filter out rows with too many NAs (optional)
+epa_1hr_wide_filtered <- epa_1hr_wide %>%
+  filter(rowSums(is.na(.)) < 3)
+
+# STEP 5: Convert site columns to numeric
+epa_1hr_wide_numeric <- epa_1hr_wide_filtered %>%
+  mutate(across(-date, ~ as.numeric(unlist(.))))
+
+# STEP 6: Create 5x5 matrix plot
+ggpairs(
+  data = epa_1hr_wide_numeric[, -1],  # exclude date column
+  upper = list(continuous = wrap("points", alpha = 0.6, size = 1)),
+  lower = list(continuous = wrap("smooth", alpha = 0.6, size = 0.8)),
+  diag = list(continuous = wrap("densityDiag", alpha = 0.4))
+)
+
+```
+
+```{r}
+library(RAQSAPI)
+
+epa_sites <- aqs_sites_by_county(
+  stateFIPS = "39",    # Ohio
+  countycode = "035",  # Cuyahoga County
+  return_header = FALSE
+)
+
+# Preview to see latitude and longitude
+head(epa_sites)
+
+cleanincle_coords <- cleanincle_data %>%
+  select(device_eui, latitude, longitude) %>%
+  distinct()
+
+# Preview
+head(cleanincle_coords)
+
+```
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(readr)
+
+# Mapping of EPA site to CLEANinCLE device_eui
+site_device_map <- list(
+  "0034" = "0004A30B00084CF2",
+  "0038" = "0004A30B00085131",
+  "0045" = "0004A30B00085575",
+  "0060" = "0004A30B00087263",
+  "0065" = "0004A30B00085FFF"
+)
+
+# Loop through each EPA site and its matched CLEANinCLE sensor
+for (site in names(site_device_map)) {
+  
+  device <- site_device_map[[site]]
+  
+  # Get EPA 24-hour data for the site
+  epa_site_data <- epa_24hr_clean %>%
+    filter(site_number == site) %>%
+    select(date, pm25_epa = pm25)
+  
+  # Get CLEANinCLE daily average for the matched device
+  cleanincle_device_data <- cleanincle_data %>%
+    filter(device_eui == device, measure_name == "mc_pm2_5", !is.na(value)) %>%
+    mutate(date = as.Date(time)) %>%
+    group_by(date) %>%
+    summarise(pm25_cleanincle = mean(value, na.rm = TRUE), .groups = "drop")
+  
+  # Join by date
+  comparison_df <- inner_join(epa_site_data, cleanincle_device_data, by = "date")
+  
+  # Plot comparison
+  p <- ggplot(comparison_df, aes(x = pm25_cleanincle, y = pm25_epa)) +
+    geom_point(color = "darkblue", alpha = 0.7, size = 2) +
+    geom_smooth(method = "lm", color = "red", linewidth = 0.8, se = FALSE) +
+    labs(
+      title = paste("PM2.5 Comparison - EPA Site", site, "vs CLEANinCLE", device),
+      x = "CLEANinCLE Daily Avg PM2.5 (µg/m³)",
+      y = "EPA 24-Hour PM2.5 (µg/m³)"
+    ) +
+    theme_minimal(base_size = 13)
+  
+  print(p)
+}
+
+
+```
+
+
+```{r}
+# Load required libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gridExtra)
+library(readr)
+
+# STEP 1: Prepare wide-format data
+epa_24hr_wide <- epa_24hr_clean %>%
+  pivot_wider(names_from = site_number, values_from = pm25, values_fn = mean) %>%
+  filter(rowSums(is.na(.)) < 3) %>%
+  mutate(across(-date, as.numeric))  # Ensure numeric columns except 'date'
+
+# STEP 2: Set up
+site_names <- sort(unique(epa_24hr_clean$site_number))
+n_sites <- length(site_names)
+
+# Define axis range for consistency across all plots
+axis_min <- 0
+axis_max <- ceiling(max(epa_24hr_wide[site_names], na.rm = TRUE))
+
+# STEP 3: Create pairwise comparison plots (lower triangle only)
+plot_list <- list()
+
+for (i in seq_len(n_sites)) {
+  for (j in seq_len(n_sites)) {
+    
+    if (j >= i) next  # Only lower triangle
+    
+    x_site <- site_names[j]
+    y_site <- site_names[i]
+    
+    df_pair <- epa_24hr_wide %>%
+      select(all_of(c(x_site, y_site))) %>%
+      rename(x = all_of(x_site), y = all_of(y_site)) %>%
+      filter(!is.na(x) & !is.na(y))
+    
+    # Compute R²
+    r2_text <- if (nrow(df_pair) > 2) {
+      r2 <- summary(lm(y ~ x, data = df_pair))$r.squared
+      paste0("R² = ", round(r2, 2))
+    } else {
+      "R² = NA"
+    }
+    
+    # Build the plot
+    p <- ggplot(df_pair, aes(x = x, y = y)) +
+      geom_point(color = "steelblue", size = 1.8, alpha = 0.7) +
+      geom_smooth(method = "lm", se = FALSE, color = "red", linewidth = 0.9) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+      coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
+      labs(
+        x = paste("Site", x_site),
+        y = paste("Site", y_site),
+        subtitle = r2_text
+      ) +
+      theme_minimal(base_size = 14) +
+      theme(
+        plot.subtitle = element_text(hjust = 0.5, size = 12),
+        axis.title = element_text(size = 12),
+        axis.text = element_text(size = 10),
+        plot.margin = margin(10, 10, 10, 10)
+      )
+    
+    plot_list[[length(plot_list) + 1]] <- p
+  }
+}
+
+# STEP 4: Save the 5x5 grid to a high-res PDF
+pdf("EPA_PM25_Pairwise_Comparison_5x5.pdf", width = 18, height = 18)
+grid.arrange(grobs = plot_list, ncol = 5, nrow = 5)
+dev.off()
+```
+
+```{r}
+# Load libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gridExtra)
+
+# STEP 1: Prepare wide-format data
+epa_24hr_wide <- epa_24hr_clean %>%
+  pivot_wider(names_from = site_number, values_from = pm25, values_fn = mean) %>%
+  filter(rowSums(is.na(.)) < 3)
+
+# Force numeric site names (e.g., convert "0034" to 34)
+site_names <- sort(unique(epa_24hr_clean$site_number))
+
+# Ensure columns are numeric
+epa_24hr_wide <- epa_24hr_wide %>%
+  mutate(across(all_of(site_names), as.numeric))
+
+# STEP 2: Force fixed axis
+axis_min <- 0
+axis_max <- 28  # Enough to cover all your data
+
+plot_list <- list()
+n_sites <- length(site_names)
+
+for (i in seq_len(n_sites)) {
+  for (j in seq_len(n_sites)) {
+    if (j >= i) next
+
+    x_site <- site_names[j]
+    y_site <- site_names[i]
+
+    df_pair <- epa_24hr_wide %>%
+      select(all_of(c(x_site, y_site))) %>%
+      rename(x = all_of(x_site), y = all_of(y_site)) %>%
+      filter(!is.na(x) & !is.na(y))
+
+    r2_text <- if (nrow(df_pair) > 2) {
+      r2 <- summary(lm(y ~ x, data = df_pair))$r.squared
+      paste0("R² = ", round(r2, 2))
+    } else {
+      "R² = NA"
+    }
+
+    p <- ggplot(df_pair, aes(x = x, y = y)) +
+      geom_point(color = "steelblue", size = 2, alpha = 0.7) +
+      geom_smooth(method = "lm", se = FALSE, color = "red", linewidth = 1) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+      scale_x_continuous(limits = c(axis_min, axis_max), expand = c(0, 0)) +
+      scale_y_continuous(limits = c(axis_min, axis_max), expand = c(0, 0)) +
+      labs(
+        x = paste("Site", x_site),
+        y = paste("Site", y_site),
+        subtitle = r2_text
+      ) +
+      theme_minimal(base_size = 16) +
+      theme(
+        plot.subtitle = element_text(hjust = 0.5, size = 14),
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 12),
+        plot.margin = margin(12, 12, 12, 12)
+      )
+
+    plot_list[[length(plot_list) + 1]] <- p
+  }
+}
+
+# STEP 3: Save to multi-page PDF in 4x4 grids
+pdf("EPA_PM25_Pairwise_Comparison_4x4_FINAL_FIXEDAXIS.pdf", width = 18, height = 18)
+
+for (k in seq_len(ceiling(length(plot_list) / 16))) {
+  start <- (k - 1) * 16 + 1
+  end <- min(k * 16, length(plot_list))
+  grid.arrange(grobs = plot_list[start:end], ncol = 4, nrow = 4)
+}
+
+dev.off()
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gridExtra)
+
+# STEP 1: Calculate daily averages from 1-hour data
+epa_1hr_daily_avg <- epa_1hr_clean %>%
+  group_by(site_number, date) %>%
+  summarise(pm25 = mean(pm25, na.rm = TRUE), .groups = "drop")
+
+# STEP 2: Pivot to wide format
+epa_1hr_wide <- epa_1hr_daily_avg %>%
+  pivot_wider(names_from = site_number, values_from = pm25) %>%
+  filter(rowSums(is.na(.)) < 3) %>%
+  mutate(across(-date, as.numeric))
+
+# STEP 3: Setup
+site_names <- colnames(epa_1hr_wide)[-1]
+n_sites <- length(site_names)
+axis_max <- ceiling(max(epa_1hr_wide[site_names], na.rm = TRUE))
+axis_min <- floor(min(epa_1hr_wide[site_names], na.rm = TRUE))
+
+# STEP 4: Build lower triangle plots
+plot_list <- list()
+
+for (i in seq_len(n_sites)) {
+  for (j in seq_len(n_sites)) {
+    if (j >= i) next
+
+    x_site <- site_names[j]
+    y_site <- site_names[i]
+
+    df_pair <- epa_1hr_wide %>%
+      select(all_of(c(x_site, y_site))) %>%
+      rename(x = all_of(x_site), y = all_of(y_site)) %>%
+      filter(!is.na(x) & !is.na(y))
+
+    r2 <- if (nrow(df_pair) > 2) round(summary(lm(y ~ x, data = df_pair))$r.squared, 2) else NA
+
+    p <- ggplot(df_pair, aes(x = x, y = y)) +
+      geom_point(color = "steelblue", size = 3, alpha = 0.6) +
+      geom_smooth(method = "lm", se = FALSE, color = "red", linewidth = 1) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray40") +
+      coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
+      labs(
+        x = paste("Site", x_site),
+        y = paste("Site", y_site),
+        subtitle = if (!is.na(r2)) paste("R² =", r2) else NULL
+      ) +
+      theme_minimal(base_size = 16) +
+      theme(
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 15),
+        plot.subtitle = element_text(size = 14, hjust = 0.5),
+        plot.margin = margin(10, 10, 10, 10)
+      )
+
+    plot_list[[length(plot_list) + 1]] <- p
+  }
+}
+
+# STEP 5: Arrange in 5x5 grid layout and save
+grid_plot <- grid.arrange(grobs = plot_list, ncol = 5, nrow = 5)
+
+ggsave(
+  filename = "EPA_PM25_1hr_LowerTriangleGrid_Improved.png",
+  plot = grid_plot,
+  width = 22, height = 22, dpi = 300
+)
+```
+
+
+```{r}
+# Load required libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gridExtra)
+
+# STEP 1: Prepare wide-format data
+epa_24hr_wide <- epa_24hr_clean %>%
+  pivot_wider(names_from = site_number, values_from = pm25, values_fn = mean) %>%
+  filter(rowSums(is.na(.)) < 3)
+
+# STEP 2: Get valid site names (excluding 'date' column)
+site_names <- setdiff(names(epa_24hr_wide), "date")
+n_sites <- length(site_names)
+
+# STEP 3: Set consistent axis limits
+axis_min <- 0
+axis_max <- 28
+
+# STEP 4: Create all 25 plots with scatter + regression
+plot_list <- list()
+
+for (i in seq_len(n_sites)) {
+  for (j in seq_len(n_sites)) {
+
+    x_site <- site_names[j]
+    y_site <- site_names[i]
+    index <- (i - 1) * n_sites + j
+
+    # Rename selected pair to x and y
+    df_pair <- epa_24hr_wide %>%
+      select(x = all_of(x_site), y = all_of(y_site)) %>%
+      filter(!is.na(x) & !is.na(y))
+
+    # Calculate R²
+    r2_text <- if (nrow(df_pair) > 2) {
+      r2 <- summary(lm(y ~ x, data = df_pair))$r.squared
+      paste0("R² = ", round(r2, 2))
+    } else {
+      "R² = NA"
+    }
+
+    # Create plot with regression line
+    p <- ggplot(df_pair, aes(x = x, y = y)) +
+      geom_point(color = "steelblue", size = 2, alpha = 0.7) +
+      geom_smooth(method = "lm", se = FALSE, color = "red", linewidth = 1.2) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+      coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
+      labs(
+        x = paste("Site", x_site),
+        y = paste("Site", y_site),
+        subtitle = r2_text
+      ) +
+      theme_minimal(base_size = 14) +
+      theme(
+        plot.subtitle = element_text(hjust = 0.5, size = 12),
+        axis.title = element_text(size = 12),
+        axis.text = element_text(size = 10),
+        plot.margin = margin(10, 10, 10, 10)
+      )
+
+    plot_list[[index]] <- p
+  }
+}
+
+# STEP 5: Save all 25 plots to a large high-quality PDF
+pdf("EPA_PM25_All25_Scatter_Regression.pdf", width = 22, height = 22)
+grid.arrange(grobs = plot_list, ncol = n_sites, nrow = n_sites)
+dev.off()
+```
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

@@ -1,0 +1,271 @@
+---
+title: "EPA_AQS_API"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+library(RAQSAPI)
+
+# Example: PM2.5 in Cuyahoga County, Ohio, Jan–Dec 2024
+epa_data <- RAQSAPI::aqs_sampledata_by_county(
+  username = "rnl34@case.edu",
+  key = "copperhawk19",
+  parameter = "88101",  # PM2.5
+  bdate = "20240101",
+  edate = "20241231",
+  stateFIPS = "39",     # Ohio
+  countycode = "035",   # Cuyahoga
+  return_header = TRUE
+)
+
+# View first few rows
+head(epa_data)
+
+
+```
+
+#copied
+```{r}
+
+devtools::install_github("USEPA/RAQSAPI")library(RAQSAPI)
+
+# Set your credentials
+aqs_credentials(username = "rnl34@case.edu", key = "copperhawk19")
+
+# Pull PM2.5 sample data for site 0060 in Cuyahoga County
+epa_data <- RAQSAPI::aqs_daily_data_by_county(
+  parameter = "88101",          # PM2.5
+  bdate = "20240101",
+  edate = "20241231",
+  stateFIPS = "39",             # Ohio
+  countycode = "035",           # Cuyahoga
+  return_header = TRUE
+)
+
+# Preview
+str(epa_data)
+head(epa_data)
+```
+
+```{r}
+devtools::install_github("USEPA/RAQSAPI")
+library(RAQSAPI)
+aqs_credentials(username = "rnl34@case.edu", key = "copperhawk19")
+
+epa_data <- aqs_daily_data_by_county(
+  parameter = "88101",       # PM2.5 parameter code
+  bdate = "20240101",        # Start date
+  edate = "20241231",        # End date
+  stateFIPS = "39",          # Ohio
+  countycode = "035",        # Cuyahoga
+  return_header = TRUE
+)
+
+str(epa_data)
+head(epa_data)
+```
+```{r}
+# Load the package
+library(RAQSAPI)
+
+# Set your EPA API credentials
+aqs_credentials(username = "rnl34@case.edu", key = "copperhawk19")
+
+# Pull daily PM2.5 data from one specific site (e.g., site number 0060)
+epa_site_data <- RAQSAPI::aqs_sampledata_by_site(
+  parameter = "88101",          # PM2.5
+ # bdate = "20240101",
+  #edate = "20240131",
+ bdate = as.Date("20240101",
+format = "%Y%m%d"),
+edate = as.Date("20240131",
+format = "%Y%m%d"),
+  stateFIPS = "39",             # Ohio
+  countycode = "035",           # Cuyahoga
+  sitenum = "0060",          # This is the specific site ID
+  return_header = FALSE
+)
+
+# View the data
+head(epa_site_data)
+```
+
+
+```{r}
+library(dplyr)
+library(readr)
+
+# Load data (if not already loaded)
+
+# Extract unique location entries
+sample_duration <- epa_site_data %>%
+  select(sample_duration) %>%
+  distinct() %>%
+  arrange(sample_duration)
+
+# View the table
+print(sample_duration)
+
+```
+
+# New code
+```{r}
+df_ozone <- RAQSAPI::aqs_dailysummary_by_county(
+  # '44201' is ozone
+  # '43201' is methane
+  parameter = '44201',
+  bdate = as.Date('20240101',
+                  format = "%Y%m%d"),
+  edate = as.Date('20240810',
+                  format = "%Y%m%d"),
+  # '08' is Colorado
+  stateFIPS = '08',
+  # '059' is Jefferson County
+  county = '059'
+)
+
+# View first few rows
+head(df_ozone)
+```
+# DATA INSPECTION
+
+```{r}
+# Check structure
+str(pm25_data)
+
+# See column names
+colnames(pm25_data)
+
+# Preview the first few rows
+head(pm25_data)
+
+# Check for missing values
+summary(pm25_data)
+
+library(dplyr)
+library(lubridate)
+
+pm25_clean <- pm25_data %>%
+  filter(measure_name == "mc_pm2_5", !is.na(value)) %>%
+  mutate(
+    datetime = as.POSIXct(time),  # already POSIXct, this is just for clarity
+    year = year(datetime),
+    month = month(datetime, label = TRUE, abbr = TRUE)
+  ) %>%
+  select(datetime, year, month, location_name, latitude, longitude, device_number, device_eui, value)
+
+pm25_clean %>%
+  distinct(device_number, location_name) %>%
+  count(device_number, name = "unique_locations") %>%
+  arrange(desc(unique_locations))
+
+```
+# Standardize column names and convert datetime
+
+```{r}
+library(dplyr)
+library(lubridate)
+
+# Rename columns for clarity and consistency
+pm25_clean <- pm25_data %>%
+  rename(
+    datetime = time,
+    lat = latitude,
+    lon = longitude,
+    location = location_name,
+    device_id = device_eui,
+    measurement_type = measure_name
+  ) %>%
+  mutate(
+    datetime = as.POSIXct(datetime),
+    year = year(datetime),
+    month = month(datetime, label = TRUE),
+    day = day(datetime),
+    julian_day = as.numeric(datetime) / 86400 + 2440587.5
+  )
+```
+
+# Checking for missing values
+
+```{r}
+# Missing values
+colSums(is.na(pm25_clean))
+
+# Number of unique locations and devices
+pm25_clean %>%
+  summarise(
+    unique_locations = n_distinct(location),
+    unique_devices = n_distinct(device_id),
+    time_range = paste(min(datetime), "to", max(datetime))
+  )
+
+library(tidyr)
+
+pm25_wide <- pm25_clean %>%
+  pivot_wider(
+    id_cols = c(datetime, location, lat, lon, device_id, device_number),
+    names_from = measurement_type,
+    values_from = value
+  )
+
+```
+# PM2.5 time series by device
+
+```{r}
+library(ggplot2)
+library(patchwork)
+
+# Filter valid PM2.5 readings
+filtered_pm25 <- pm25_wide %>%
+  filter(!is.na(mc_pm2_5))
+
+# Get unique device-location pairs (limit to 28 for single-page PDF)
+plot_groups <- filtered_pm25 %>%
+  distinct(device_number, location) %>%
+  head(28)
+
+# Create a list to hold plots
+plot_list <- vector("list", length = nrow(plot_groups))
+
+# Loop to create individual plots
+for (i in seq_len(nrow(plot_groups))) {
+  dev <- plot_groups$device_number[i]
+  loc <- plot_groups$location[i]
+
+  df_subset <- filtered_pm25 %>%
+    filter(device_number == dev, location == loc)
+
+  p <- ggplot(df_subset, aes(x = datetime, y = mc_pm2_5)) +
+    geom_line(color = "steelblue", linewidth = 0.3) +
+    scale_x_datetime(date_breaks = "1 month", date_labels = "%b\n%Y") +
+    ylim(0, 200) +
+    labs(
+      title = paste("Device:", dev),
+      subtitle = paste("Location:", loc),
+      x = NULL,
+      y = expression("PM"[2.5]*" (µg/m³)")
+    ) +
+    theme_minimal(base_size = 9)
+
+  plot_list[[i]] <- p
+}
+
+# Combine all plots into one grid
+combined_plot <- wrap_plots(plot_list, ncol = 4, nrow = 7)
+
+# Save to PDF
+ggsave("EPA_PM25_Device_Plots.pdf", combined_plot, width = 16, height = 28, units = "in")
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
