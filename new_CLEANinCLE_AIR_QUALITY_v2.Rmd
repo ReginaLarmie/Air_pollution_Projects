@@ -25,7 +25,7 @@ library(readr)
 
 
 # Load your data
-data <- read_csv("~/research/Data/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv") 
+data <- read_csv("~/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv") 
 
 # View dimensions
 dim(data)
@@ -46,7 +46,7 @@ Rename key columns for clarity and convert the data from long to wide format so 
 
 ```{r}
 
-data_clean <- read_csv("~/research/Data/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
+data_clean <- read_csv("~/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
 
 # Rename for simplicity
 data_clean <- data_clean %>%
@@ -304,4 +304,435 @@ ggplot(filtered_data, aes(x = datetime_parsed, y = mc_pm2_5)) +
   theme_minimal(base_size = 12) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
+```{r}
 
+library(ggplot2)
+library(patchwork)
+# Make sure datetime_parsed is POSIXct
+data_wide <- data_wide %>%
+  mutate(datetime_parsed = as.POSIXct(datetime_parsed))
+
+# Filter valid entries
+filtered_data <- data_wide %>%
+  filter(!is.na(mc_pm2_5))
+
+# Get 28 unique device-location pairs
+plot_groups <- filtered_data %>%
+  distinct(device_id, location) %>%
+  head(28)  # limit to first 28
+
+# Generate list of 28 plots
+plot_list <- vector("list", length = nrow(plot_groups))
+
+for (i in seq_len(nrow(plot_groups))) {
+  dev <- plot_groups$device_id[i]
+  loc <- plot_groups$location[i]
+
+  df_subset <- filtered_data %>%
+    filter(device_id == dev, location == loc)
+
+  p <- ggplot(df_subset, aes(x = datetime_parsed, y = mc_pm2_5)) +
+    geom_line(color = "steelblue", linewidth = 0.3) +
+    scale_x_datetime(date_breaks = "1 month", date_labels = "%b") +
+    ylim(0, 200) +
+    labs(
+      title = paste("Device:", dev),
+      subtitle = paste("Location:", loc),
+      x = NULL,
+      y = expression("PM"[2.5]*" (µg/m³)")
+    ) +
+    theme_minimal(base_size = 9)
+
+  plot_list[[i]] <- p
+}
+# Combine using patchwork and export
+combined_plot <- wrap_plots(plot_list, ncol = 4, nrow = 7)
+
+ggsave("CLEANinCLE_PM2.5_28plots.pdf", combined_plot, width = 16, height = 28, units = "in")
+```
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+
+# Filter for PM2.5 data and clean timestamps
+pm25_data <- data %>%
+  filter(measure_name == "mc_pm2_5", !is.na(value)) %>%
+  mutate(time = ymd_hms(time))
+
+# Open a PDF to save all plots
+pdf("PM25_by_device_number.pdf", width = 14, height = 18)  # Adjust size as needed
+
+# Get unique device numbers
+devices <- unique(pm25_data$device_number)
+
+# Set up grid layout
+par(mfrow = c(7, 4), mar = c(4, 4, 2, 1))  # 7 rows, 4 columns
+
+# Plot for each device_number
+for (dev in devices) {
+  dev_data <- pm25_data %>% filter(device_number == dev)
+  
+  plot(dev_data$time, dev_data$value,
+       type = "l", col = "steelblue", lwd = 1,
+       xlab = "Date", ylab = "PM2.5 (µg/m³)",
+       main = paste("Device:", dev),
+       ylim = c(0, max(pm25_data$value, na.rm = TRUE)))
+}
+
+# Close the PDF
+dev.off()
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+
+# Filter and format data
+pm25_data <- data %>%
+  filter(measure_name == "mc_pm2_5", !is.na(value)) %>%
+  mutate(time = ymd_hms(time),
+         device_number = as.factor(device_number))  # ensure it's treated as categorical
+
+# Open a PDF
+pdf("PM25_TimeSeries_Devices.pdf", width = 14, height = 18)  # adjust as needed
+
+# Plot
+ggplot(pm25_data, aes(x = time, y = value)) +
+  geom_line(color = "steelblue", linewidth = 0.3) +
+  facet_wrap(~ device_number, ncol = 4) +
+  scale_x_datetime(date_labels = "%b\n%Y", date_breaks = "1 month") +
+  labs(
+    title = "PM2.5 Time Series by Device Number",
+    x = "Date",
+    y = expression("PM"[2.5]*" (µg/m³)")
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Close PDF
+dev.off()
+```
+
+```{r}
+library(ggplot2)
+library(patchwork)
+
+# Make sure datetime_parsed is POSIXct
+data_wide <- data_wide %>%
+  mutate(datetime_parsed = as.POSIXct(datetime_parsed))
+
+# Filter valid entries
+filtered_data <- data_wide %>%
+  filter(!is.na(mc_pm2_5))
+
+# Get 28 unique device-location pairs
+plot_groups <- filtered_data %>%
+  distinct(device_id, location) %>%
+  head(28)  # limit to first 28
+
+# Generate list of 28 plots
+plot_list <- vector("list", length = nrow(plot_groups))
+
+for (i in seq_len(nrow(plot_groups))) {
+  dev <- plot_groups$device_id[i]
+  loc <- plot_groups$location[i]
+
+  df_subset <- filtered_data %>%
+    filter(device_id == dev, location == loc)
+
+  p <- ggplot(df_subset, aes(x = datetime_parsed, y = mc_pm2_5)) +
+    geom_line(color = "steelblue", linewidth = 0.3) +
+    scale_x_datetime(
+      date_breaks = "1 month",
+      date_labels = "%b",
+      sec.axis = dup_axis(
+        labels = function(x) ifelse(month(x) == 1 | x == min(x), year(x), ""),
+        name = NULL
+      )
+    ) +
+    ylim(0, 200) +
+    labs(
+      title = paste("Device:", dev),
+      subtitle = paste("Location:", loc),
+      x = NULL,
+      y = expression("PM"[2.5]*" (µg/m³)")
+    ) +
+    theme_minimal(base_size = 9) +
+    theme(
+      axis.text.x = element_text(vjust = 1),
+      axis.ticks.length = unit(5, "pt"),
+      axis.text.x.top = element_text(margin = margin(b = 10)),
+      axis.ticks.x.top = element_line()
+    )
+
+  plot_list[[i]] <- p
+}
+
+# Combine using patchwork and export
+combined_plot <- wrap_plots(plot_list, ncol = 4, nrow = 7)
+
+ggsave("CLEANinCLE_PM2.5_28plots.pdf", combined_plot, width = 16, height = 28, units = "in")
+```
+
+```{r}
+library(ggplot2)
+library(patchwork)
+
+# Step 1: Read the original data that includes device_number
+original_data <- read_csv("~/research/Data/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv") %>%
+  select(device_eui, device_number) %>%
+  distinct()
+
+# Step 2: Add device_number to data_wide using device_id (device_eui)
+data_wide <- data_wide %>%
+  left_join(original_data, by = c("device_id" = "device_eui"))
+
+# Ensure datetime_parsed is POSIXct
+data_wide <- data_wide %>%
+  mutate(datetime_parsed = as.POSIXct(datetime_parsed))
+
+# Filter valid entries
+filtered_data <- data_wide %>%
+  filter(!is.na(mc_pm2_5))
+
+# Get 28 unique device_number-location pairs
+plot_groups <- filtered_data %>%
+  distinct(device_number, location) %>%
+  head(28)
+
+# Generate list of plots
+plot_list <- vector("list", length = nrow(plot_groups))
+
+for (i in seq_len(nrow(plot_groups))) {
+  dev_num <- plot_groups$device_number[i]
+  loc <- plot_groups$location[i]
+
+  df_subset <- filtered_data %>%
+    filter(device_number == dev_num, location == loc)
+
+  p <- ggplot(df_subset, aes(x = datetime_parsed, y = mc_pm2_5)) +
+    geom_line(color = "steelblue", linewidth = 0.3) +
+    scale_x_datetime(
+      date_breaks = "1 month",
+      date_labels = "%b",
+      sec.axis = dup_axis(
+        labels = function(x) ifelse(month(x) == 1 | x == min(x), year(x), ""),
+        name = NULL
+      )
+    ) +
+    ylim(0, 200) +
+    labs(
+      title = paste("Device Number:", dev_num),
+      subtitle = paste("Location:", loc),
+      x = NULL,
+      y = expression("PM"[2.5]*" (µg/m³)")
+    ) +
+    theme_minimal(base_size = 9) +
+    theme(
+      axis.text.x = element_text(vjust = 1),
+      axis.ticks.length = unit(5, "pt"),
+      axis.text.x.top = element_text(margin = margin(b = 10)),
+      axis.ticks.x.top = element_line()
+    )
+
+  plot_list[[i]] <- p
+}
+
+# Combine and save
+combined_plot <- wrap_plots(plot_list, ncol = 4, nrow = 7)
+
+ggsave("CLEANinCLE_PM2.5_28plots_by_device_number.pdf", combined_plot, width = 16, height = 28, units = "in")
+```
+
+```{r}
+library(ggplot2)
+library(patchwork)
+
+# Make sure datetime_parsed is POSIXct
+data_wide <- data_wide %>%
+  mutate(datetime_parsed = as.POSIXct(datetime_parsed))
+
+# Filter valid PM2.5 rows
+filtered_data <- data_wide %>%
+  filter(!is.na(mc_pm2_5))
+
+# Get 28 unique device-location pairs based on device_number
+plot_groups <- filtered_data %>%
+  distinct(device_number, location) %>%
+  head(28)
+
+# Create empty list to hold plots
+plot_list <- vector("list", length = nrow(plot_groups))
+
+# Loop through device_number-location pairs
+for (i in seq_len(nrow(plot_groups))) {
+  dev_num <- plot_groups$device_number[i]
+  loc <- plot_groups$location[i]
+
+  df_subset <- filtered_data %>%
+    filter(device_number == dev_num, location == loc)
+
+  p <- ggplot(df_subset, aes(x = datetime_parsed, y = mc_pm2_5)) +
+    geom_line(color = "steelblue", linewidth = 0.3) +
+    scale_x_datetime(date_breaks = "1 month", date_labels = "%b") +
+    ylim(0, 200) +
+    labs(
+      title = paste("Device Number:", dev_num),
+      subtitle = paste("Location:", loc),
+      x = NULL,
+      y = expression("PM"[2.5]*" (µg/m³)")
+    ) +
+    theme_minimal(base_size = 9)
+
+  plot_list[[i]] <- p
+}
+
+# Combine and save as PDF
+combined_plot <- wrap_plots(plot_list, ncol = 4, nrow = 7)
+
+ggsave("CLEANinCLE_PM2.5_28plots_by_device_number.pdf", combined_plot,
+       width = 16, height = 28, units = "in")
+```
+
+
+```{r}
+library(ggplot2)
+library(patchwork)
+library(lubridate)
+
+# Make sure datetime_parsed is POSIXct
+data_wide <- data_wide %>%
+  mutate(datetime_parsed = as.POSIXct(datetime_parsed))
+
+# Filter valid PM2.5 rows
+filtered_data <- data_wide %>%
+  filter(!is.na(mc_pm2_5))
+
+# Define common x-axis range and monthly breaks
+x_min <- as.POSIXct("2024-11-01 00:00:00", tz = "UTC")
+x_max <- as.POSIXct("2025-05-31 23:59:59", tz = "UTC")
+x_breaks <- seq(from = x_min, to = x_max, by = "1 month")
+
+# Get 28 unique device-location pairs
+plot_groups <- filtered_data %>%
+  distinct(device_number, location) %>%
+  head(28)
+
+# Create plot list
+plot_list <- vector("list", length = nrow(plot_groups))
+
+for (i in seq_len(nrow(plot_groups))) {
+  dev_num <- plot_groups$device_number[i]
+  loc <- plot_groups$location[i]
+
+  df_subset <- filtered_data %>%
+    filter(device_number == dev_num, location == loc)
+
+  p <- ggplot(df_subset, aes(x = datetime_parsed, y = mc_pm2_5)) +
+    geom_line(color = "steelblue", linewidth = 0.3) +
+    scale_x_datetime(
+      breaks = x_breaks,
+      labels = date_format("%b"),
+      limits = c(x_min, x_max)
+    ) +
+    ylim(0, 200) +
+    labs(
+      title = paste("Device Number:", dev_num),
+      subtitle = paste("Location:", loc),
+      x = NULL,
+      y = expression("PM"[2.5]*" (µg/m³)")
+    ) +
+    theme_minimal(base_size = 9) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+  plot_list[[i]] <- p
+}
+
+# Combine and export to PDF
+combined_plot <- wrap_plots(plot_list, ncol = 4, nrow = 7)
+
+ggsave("CLEANinCLE_PM2.5_28plots_by_device_number_aligned_x.pdf",
+       combined_plot, width = 16, height = 28, units = "in")
+```
+
+
+```{r}
+library(ggplot2)
+library(patchwork)
+library(scales)
+library(lubridate)
+
+# Ensure datetime_parsed is POSIXct
+data_wide <- data_wide %>%
+  mutate(datetime_parsed = as.POSIXct(datetime_parsed))
+
+# Filter valid PM2.5 rows
+filtered_data <- data_wide %>%
+  filter(!is.na(mc_pm2_5))
+
+# Define common x-axis range and breaks
+x_min <- as.POSIXct("2024-11-01", tz = "UTC")
+x_max <- as.POSIXct("2025-05-31", tz = "UTC")
+x_breaks <- seq(from = x_min, to = x_max, by = "1 month")
+
+# Get 28 unique device-location pairs
+plot_groups <- filtered_data %>%
+  distinct(device_number, location) %>%
+  head(28)
+
+# Create plot list
+plot_list <- vector("list", length = nrow(plot_groups))
+
+for (i in seq_len(nrow(plot_groups))) {
+  dev_num <- plot_groups$device_number[i]
+  loc <- plot_groups$location[i]
+
+  df_subset <- filtered_data %>%
+    filter(device_number == dev_num, location == loc)
+
+  p <- ggplot(df_subset, aes(x = datetime_parsed, y = mc_pm2_5)) +
+    geom_line(color = "steelblue", linewidth = 0.3) +
+    scale_x_datetime(
+      breaks = x_breaks,
+      labels = date_format("%b %Y"),  # <-- show Month Year
+      limits = c(x_min, x_max)
+    ) +
+    ylim(0, 200) +
+    labs(
+      title = paste("Device Number:", dev_num),
+      subtitle = paste("Location:", loc),
+      x = NULL,
+      y = expression("PM"[2.5]*" (µg/m³)")
+    ) +
+    theme_minimal(base_size = 9) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+  plot_list[[i]] <- p
+}
+
+# Combine and export to PDF
+combined_plot <- wrap_plots(plot_list, ncol = 4, nrow = 7)
+
+ggsave("CLEANinCLE_PM2.5_28plots_month_year.pdf",
+       combined_plot, width = 16, height = 28, units = "in")
+```
+
+
+```{r}
+library(dplyr)
+library(lubridate)
+
+# Calculate daily mean PM2.5
+clean_daily_mean <- data_wide %>%
+  filter(!is.na(mc_pm2_5)) %>%
+  mutate(date = as.Date(datetime_parsed)) %>%
+  group_by(date) %>%
+  summarise(mean_pm25 = mean(mc_pm2_5, na.rm = TRUE)) %>%
+  ungroup()
+```

@@ -17,11 +17,7 @@ library(lubridate)
 library(janitor)
 
 # Load your data
-<<<<<<< HEAD
 data <- read_csv("~/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv") 
-=======
-data <- read_csv("~/R_Projects/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
->>>>>>> 7d664f5918fa7a1a31c94af84ef806ce9e7fc4b5
 
 # View dimensions
 dim(data)
@@ -47,11 +43,7 @@ library(tidyr)
 library(readr)
 library(lubridate)
 
-<<<<<<< HEAD
 data_clean <- read_csv("~/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
-=======
-data_clean <- read_csv("~/R_Projects/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
->>>>>>> 7d664f5918fa7a1a31c94af84ef806ce9e7fc4b5
 
 # Rename for simplicity
 data_clean <- data_clean %>%
@@ -103,11 +95,7 @@ library (dplyr)
 library (readr)
 
 # Load your data
-<<<<<<< HEAD
 data <- read_csv("~/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
-=======
-data <- read_csv("~/R_Projects/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
->>>>>>> 7d664f5918fa7a1a31c94af84ef806ce9e7fc4b5
 
 # Count number of unique locations (lat, lon) per device_number
 location_counts <- data %>%
@@ -129,6 +117,28 @@ device_location_counts <- data %>%
 
 print(device_location_counts)
 ```
+
+```{r}
+library(dplyr)
+library(readr)
+
+# Load data (if not already loaded)
+data <- read_csv("~/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
+
+# Extract unique location entries
+unique_locations <- data %>%
+  select(device_number, location_name, latitude, longitude) %>%
+  distinct() %>%
+  arrange(device_number)
+
+# View the table
+print(unique_locations)
+
+# Optional: save as CSV
+write_csv(unique_locations, "~/Air_pollution_Projects/Unique_Sample_Locations.csv")
+
+```
+
 
 
 ```{r}

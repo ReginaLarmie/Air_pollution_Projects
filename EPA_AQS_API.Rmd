@@ -14,67 +14,7 @@ This is an R Markdown document. Markdown is a simple formatting syntax for autho
 
 When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
 
-```{r}
-library(RAQSAPI)
 
-# Example: PM2.5 in Cuyahoga County, Ohio, Jan–Dec 2024
-epa_data <- RAQSAPI::aqs_sampledata_by_county(
-  username = "rnl34@case.edu",
-  key = "copperhawk19",
-  parameter = "88101",  # PM2.5
-  bdate = "20240101",
-  edate = "20241231",
-  stateFIPS = "39",     # Ohio
-  countycode = "035",   # Cuyahoga
-  return_header = TRUE
-)
-
-# View first few rows
-head(epa_data)
-
-
-```
-
-#copied
-```{r}
-
-devtools::install_github("USEPA/RAQSAPI")library(RAQSAPI)
-
-# Set your credentials
-aqs_credentials(username = "rnl34@case.edu", key = "copperhawk19")
-
-# Pull PM2.5 sample data for site 0060 in Cuyahoga County
-epa_data <- RAQSAPI::aqs_daily_data_by_county(
-  parameter = "88101",          # PM2.5
-  bdate = "20240101",
-  edate = "20241231",
-  stateFIPS = "39",             # Ohio
-  countycode = "035",           # Cuyahoga
-  return_header = TRUE
-)
-
-# Preview
-str(epa_data)
-head(epa_data)
-```
-
-```{r}
-devtools::install_github("USEPA/RAQSAPI")
-library(RAQSAPI)
-aqs_credentials(username = "rnl34@case.edu", key = "copperhawk19")
-
-epa_data <- aqs_daily_data_by_county(
-  parameter = "88101",       # PM2.5 parameter code
-  bdate = "20240101",        # Start date
-  edate = "20241231",        # End date
-  stateFIPS = "39",          # Ohio
-  countycode = "035",        # Cuyahoga
-  return_header = TRUE
-)
-
-str(epa_data)
-head(epa_data)
-```
 ```{r}
 # Load the package
 library(RAQSAPI)
@@ -118,154 +58,469 @@ sample_duration <- epa_site_data %>%
 print(sample_duration)
 
 ```
-
-# New code
 ```{r}
-df_ozone <- RAQSAPI::aqs_dailysummary_by_county(
-  # '44201' is ozone
-  # '43201' is methane
-  parameter = '44201',
-  bdate = as.Date('20240101',
-                  format = "%Y%m%d"),
-  edate = as.Date('20240810',
-                  format = "%Y%m%d"),
-  # '08' is Colorado
-  stateFIPS = '08',
-  # '059' is Jefferson County
-  county = '059'
-)
+library(dplyr)
 
-# View first few rows
-head(df_ozone)
+# Check unique sample durations first (optional, just to explore)
+unique(epa_site_data$sample_duration)
+
+# Filter for 1-hour duration only
+epa_1hr_data <- epa_site_data %>%
+  filter(sample_duration == "1 HOUR")
+
+# View the filtered data
+head(epa_1hr_data)
+```
+# Data Cleaning and Analysis
+```{r}
+library(dplyr)
+library(lubridate)
+
+# Clean and prepare data
+epa_hourly_clean <- epa_1hr_data %>%
+  mutate(
+    datetime = as.POSIXct(paste(date_local, time_local), format = "%Y-%m-%d %H:%M"),
+    value = as.numeric(sample_measurement)
+  ) %>%
+  select(datetime, value, latitude, longitude, site_number, parameter, method, sample_duration)
+
+# Check result
+glimpse(epa_hourly_clean)
 ```
 # DATA INSPECTION
 
 ```{r}
-# Check structure
-str(pm25_data)
+library(ggplot2)
 
-# See column names
-colnames(pm25_data)
-
-# Preview the first few rows
-head(pm25_data)
-
-# Check for missing values
-summary(pm25_data)
-
-library(dplyr)
-library(lubridate)
-
-pm25_clean <- pm25_data %>%
-  filter(measure_name == "mc_pm2_5", !is.na(value)) %>%
-  mutate(
-    datetime = as.POSIXct(time),  # already POSIXct, this is just for clarity
-    year = year(datetime),
-    month = month(datetime, label = TRUE, abbr = TRUE)
-  ) %>%
-  select(datetime, year, month, location_name, latitude, longitude, device_number, device_eui, value)
-
-pm25_clean %>%
-  distinct(device_number, location_name) %>%
-  count(device_number, name = "unique_locations") %>%
-  arrange(desc(unique_locations))
-
+ggplot(epa_hourly_clean, aes(x = datetime, y = value)) +
+  geom_line(color = "tomato", linewidth = 0.4) +
+  labs(
+    title = "EPA Hourly PM2.5 at Site 0060 (Cuyahoga County)",
+    x = "Date and Time",
+    y = expression("PM"[2.5]*" (µg/m³)")
+  ) +
+  theme_minimal(base_size = 10)
 ```
 # Standardize column names and convert datetime
 
 ```{r}
+# Load the package
+library(RAQSAPI)
+
+# Set your EPA API credentials
+aqs_credentials(username = "rnl34@case.edu", key = "copperhawk19")
+
+# Pull 1-hour PM2.5 data from Nov 2024 to May 2025
+epa_site_data_1hr <- RAQSAPI::aqs_sampledata_by_site(
+  parameter = "88101", 
+  bdate = as.Date("20241101", format = "%Y%m%d"),
+  edate = as.Date("20250531", format = "%Y%m%d"),
+  stateFIPS = "39",        
+  countycode = "035",      
+  sitenum = "0060",        
+  return_header = FALSE
+)
+
+# Filter for only "1 HOUR" sample durations
+epa_1hr_filtered <- epa_site_data_1hr %>%
+  dplyr::filter(sample_duration == "1 HOUR")
+
+# Preview
+head(epa_1hr_filtered)
+```
+
+# Data Cleaning
+
+```{r}
 library(dplyr)
 library(lubridate)
 
-# Rename columns for clarity and consistency
-pm25_clean <- pm25_data %>%
-  rename(
-    datetime = time,
-    lat = latitude,
-    lon = longitude,
-    location = location_name,
-    device_id = device_eui,
-    measurement_type = measure_name
-  ) %>%
+epa_1hr_filtered <- epa_1hr_filtered %>%
   mutate(
-    datetime = as.POSIXct(datetime),
-    year = year(datetime),
-    month = month(datetime, label = TRUE),
-    day = day(datetime),
-    julian_day = as.numeric(datetime) / 86400 + 2440587.5
+    datetime_local = as.POSIXct(paste(date_local, time_local), format = "%Y-%m-%d %H:%M", tz = "America/New_York")
+  )
+
+#Check and filter out rows with missing or clearly invalid PM2.5 values:
+epa_1hr_filtered <- epa_1hr_filtered %>%
+  filter(!is.na(sample_measurement), sample_measurement >= 0)
+
+#Ensure correct unit (µg/m³) 
+epa_1hr_filtered <- epa_1hr_filtered %>%
+  filter(units_of_measure == "Micrograms/cubic meter (LC)")
+
+#Remove duplicate rows 
+epa_1hr_filtered <- epa_1hr_filtered %>%
+  distinct()
+
+epa_1hr_filtered <- epa_1hr_filtered %>%
+  mutate(
+    date = as.Date(datetime_local),
+    month = format(datetime_local, "%b"),
+    year = format(datetime_local, "%Y"),
+    hour = hour(datetime_local),
+    weekday = weekdays(datetime_local)
   )
 ```
-
-# Checking for missing values
+# Daily Average PM2.5 Levels And PM2.5 Daily Trend (Nov 2024–May 2025)
 
 ```{r}
-# Missing values
-colSums(is.na(pm25_clean))
+library(dplyr)
+library(ggplot2)
+library(lubridate)
 
-# Number of unique locations and devices
-pm25_clean %>%
-  summarise(
-    unique_locations = n_distinct(location),
-    unique_devices = n_distinct(device_id),
-    time_range = paste(min(datetime), "to", max(datetime))
+# Extract date for daily averaging
+epa_daily_avg <- epa_1hr_filtered %>%
+  mutate(date = as.Date(datetime_local)) %>%
+  group_by(date) %>%
+  summarise(daily_avg = mean(sample_measurement, na.rm = TRUE)) %>%
+  ungroup()
+
+# Plot daily average PM2.5
+ggplot(epa_daily_avg, aes(x = date, y = daily_avg)) +
+  geom_line(color = "firebrick", linewidth = 0.4) +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "1 month") +
+  labs(
+    title = "PM2.5 Daily Trend (Nov 2024 – May 2025)",
+    x = "Month",
+    y = expression("PM"[2.5]*" (µg/m³)")
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+# Plot: PM2.5 Hourly Trend Over Time
+
+```{r}
+ggplot(epa_1hr_filtered, aes(x = datetime_local, y = sample_measurement)) +
+  geom_line(color = "steelblue", linewidth = 0.2, alpha = 0.7) +
+  scale_x_datetime(date_labels = "%b %Y", date_breaks = "1 month") +
+  labs(
+    title = "Hourly PM2.5 Trend (Nov 2024 – May 2025)",
+    x = "Month",
+    y = expression("PM"[2.5]*" (µg/m³)")
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+epa_1hr_filtered <- epa_1hr_filtered %>%
+  mutate(
+    month_label = format(datetime_local, "%b %Y"),         # "Nov 2024"
+    month_order = format(datetime_local, "%Y-%m")          # "2024-11" (for sorting)
   )
 
-library(tidyr)
+# Create a factor with correct chronological order
+epa_1hr_filtered$month_label <- factor(
+  epa_1hr_filtered$month_label,
+  levels = epa_1hr_filtered %>%
+    arrange(month_order) %>%
+    distinct(month_label) %>%
+    pull(month_label)
+)
 
-pm25_wide <- pm25_clean %>%
-  pivot_wider(
-    id_cols = c(datetime, location, lat, lon, device_id, device_number),
-    names_from = measurement_type,
-    values_from = value
-  )
+# Plot
+ggplot(epa_1hr_filtered, aes(x = month_label, y = sample_measurement)) +
+  geom_boxplot(fill = "skyblue", outlier.alpha = 0.2) +
+  labs(
+    title = "Monthly PM2.5 Distribution (Nov 2024 – May 2025)",
+    x = "Month",
+    y = expression("PM"[2.5]*" (µg/m³)")
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+#Time Series of 1-Hour PM2.5 Measurements
+```{r}
+library(dplyr)
+library(lubridate)
+
+epa_1hr_clean <- epa_1hr_filtered %>%
+  mutate(
+    datetime_local = as.POSIXct(paste(date_local, time_local), format = "%Y-%m-%d %H:%M", tz = "America/New_York"),
+    year = year(datetime_local),
+    month = month(datetime_local, label = TRUE, abbr = TRUE)
+  ) %>%
+  filter(!is.na(sample_measurement))
+
+library(ggplot2)
+library(scales)
+
+ggplot(epa_1hr_clean, aes(x = datetime_local, y = sample_measurement)) +
+  geom_line(color = "steelblue", linewidth = 0.3) +
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b %Y") +
+  labs(
+    title = "Hourly PM2.5 Concentrations (Nov 2024 – May 2025)",
+    x = "Date",
+    y = expression("PM"[2.5]*" (µg/m³)")
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ```
-# PM2.5 time series by device
+
+#Time Series Plot (1-Hour PM2.5 Over Time):
+High-resolution trend of hourly PM2.5 values.
 
 ```{r}
 library(ggplot2)
-library(patchwork)
+library(scales)
 
-# Filter valid PM2.5 readings
-filtered_pm25 <- pm25_wide %>%
-  filter(!is.na(mc_pm2_5))
+# Plot 1-hour PM2.5 over time
+ggplot(epa_1hr_clean, aes(x = datetime_local, y = sample_measurement)) +
+  geom_line(color = "steelblue", linewidth = 0.3) +
+  scale_x_datetime(
+    date_breaks = "1 month",
+    date_labels = "%b\n%Y"
+  ) +
+  labs(
+    title = "1-Hour PM2.5 Trend (Nov 2024 – May 2025)",
+    x = "Date",
+    y = expression("PM"[2.5]*" (µg/m³)")
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-# Get unique device-location pairs (limit to 28 for single-page PDF)
-plot_groups <- filtered_pm25 %>%
-  distinct(device_number, location) %>%
-  head(28)
-
-# Create a list to hold plots
-plot_list <- vector("list", length = nrow(plot_groups))
-
-# Loop to create individual plots
-for (i in seq_len(nrow(plot_groups))) {
-  dev <- plot_groups$device_number[i]
-  loc <- plot_groups$location[i]
-
-  df_subset <- filtered_pm25 %>%
-    filter(device_number == dev, location == loc)
-
-  p <- ggplot(df_subset, aes(x = datetime, y = mc_pm2_5)) +
-    geom_line(color = "steelblue", linewidth = 0.3) +
-    scale_x_datetime(date_breaks = "1 month", date_labels = "%b\n%Y") +
-    ylim(0, 200) +
-    labs(
-      title = paste("Device:", dev),
-      subtitle = paste("Location:", loc),
-      x = NULL,
-      y = expression("PM"[2.5]*" (µg/m³)")
-    ) +
-    theme_minimal(base_size = 9)
-
-  plot_list[[i]] <- p
-}
-
-# Combine all plots into one grid
-combined_plot <- wrap_plots(plot_list, ncol = 4, nrow = 7)
-
-# Save to PDF
-ggsave("EPA_PM25_Device_Plots.pdf", combined_plot, width = 16, height = 28, units = "in")
 ```
+# Monthly Boxplot of 1-Hour PM2.5
+```{r}
+library(ggplot2)
+library(lubridate)
+
+epa_1hr_clean <- epa_1hr_clean %>%
+  filter(!is.na(datetime_local))
+
+epa_1hr_clean <- epa_1hr_clean %>%
+  mutate(month_year = format(datetime_local, "%Y-%m"))
+
+# Set the order of months correctly
+epa_1hr_clean$month_year <- factor(epa_1hr_clean$month_year, 
+                                   levels = sort(unique(epa_1hr_clean$month_year)))
+
+# Plot: Monthly Boxplot of 1-Hour PM2.5
+library(ggplot2)
+ggplot(epa_1hr_clean, aes(x = month_year, y = sample_measurement)) +
+  geom_boxplot(fill = "lightblue", color = "steelblue", outlier.size = 1) +
+  labs(
+    title = "Monthly Distribution of 1-Hour PM2.5 (Nov 2024 – May 2025)",
+    x = "Month",
+    y = expression("PM"[2.5]*" (µg/m³)")
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+#Hourly Pattern Plot (Average PM2.5 by Hour of Day)
+This plot helps understand what times of day tend to have higher or lower PM2.5 concentrations, averaged across the full Nov 2024–May 2025 period.
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Extract hour of day
+epa_1hr_clean <- epa_1hr_clean %>%
+  mutate(hour = lubridate::hour(datetime_local))
+
+# Compute average and standard deviation by hour
+hourly_avg <- epa_1hr_clean %>%
+  group_by(hour) %>%
+  summarise(
+    mean_pm25 = mean(sample_measurement, na.rm = TRUE),
+    sd_pm25 = sd(sample_measurement, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Plot
+ggplot(hourly_avg, aes(x = hour, y = mean_pm25)) +
+  geom_line(color = "steelblue", size = 1) +
+  geom_ribbon(aes(ymin = mean_pm25 - sd_pm25, ymax = mean_pm25 + sd_pm25), 
+              alpha = 0.2, fill = "skyblue") +
+  scale_x_continuous(breaks = 0:23) +
+  labs(
+    title = "Average 1-Hour PM2.5 by Hour of Day (Nov 2024 – Apr 2025)",
+    x = "Hour of Day (0–23)",
+    y = expression("PM"[2.5]*" (µg/m³)")
+  ) +
+  theme_minimal(base_size = 12)
+```
+# Hourly Pattern by Weekday vs Weekend
+```{r}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+
+# Add hour and day type (Weekday/Weekend)
+epa_1hr_clean <- epa_1hr_clean %>%
+  mutate(
+    hour = hour(datetime_local),
+    day_of_week = wday(datetime_local, label = TRUE),
+    day_type = ifelse(day_of_week %in% c("Sat", "Sun"), "Weekend", "Weekday")
+  )
+
+# Compute average and standard deviation of PM2.5 by hour and day type
+hourly_breakdown <- epa_1hr_clean %>%
+  group_by(hour, day_type) %>%
+  summarise(
+    mean_pm25 = mean(sample_measurement, na.rm = TRUE),
+    sd_pm25 = sd(sample_measurement, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Plot
+ggplot(hourly_breakdown, aes(x = hour, y = mean_pm25, color = day_type, fill = day_type)) +
+  geom_line(size = 1) +
+  geom_ribbon(aes(ymin = mean_pm25 - sd_pm25, ymax = mean_pm25 + sd_pm25), alpha = 0.2, color = NA) +
+  scale_x_continuous(breaks = 0:23) +
+  labs(
+    title = "Hourly PM2.5 Pattern by Day Type (Weekday vs Weekend)",
+    x = "Hour of Day (0–23)",
+    y = expression("PM"[2.5]*" (µg/m³)"),
+    color = "Day Type",
+    fill = "Day Type"
+  ) +
+  theme_minimal(base_size = 12)
+```
+```{r}
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+
+# Ensure columns are properly formatted
+epa_1hr_clean <- epa_1hr_clean %>%
+  mutate(
+    hour = hour(datetime_local),
+    day_type = ifelse(weekdays(datetime_local) %in% c("Saturday", "Sunday"), "Weekend", "Weekday"),
+    month = format(datetime_local, "%B")
+  )
+
+# Summarize mean and SD by hour, day type, and month
+epa_hourly_summary <- epa_1hr_clean %>%
+  group_by(hour, day_type, month) %>%
+  summarise(
+    mean_pm25 = mean(sample_measurement, na.rm = TRUE),
+    sd_pm25 = sd(sample_measurement, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Reorder months chronologically
+epa_hourly_summary$month <- factor(epa_hourly_summary$month,
+                                   levels = c("November", "December", "January", "February", "March", "April", "May"))
+
+# Plot (larger text, better spacing, wider output)
+plot_large <- ggplot(epa_hourly_summary, aes(x = hour, y = mean_pm25, color = day_type, fill = day_type)) +
+  geom_line(size = 1) +
+  geom_ribbon(aes(ymin = mean_pm25 - sd_pm25, ymax = mean_pm25 + sd_pm25), alpha = 0.2, color = NA) +
+  facet_wrap(~month, ncol = 3, scales = "free_y") +  # use 3 per row for better spacing
+  labs(
+    title = "Hourly PM2.5 Patterns by Day Type and Month",
+    x = "Hour of Day",
+    y = expression("PM"[2.5]*" (µg/m³)"),
+    color = "Day Type",
+    fill = "Day Type"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(strip.text = element_text(size = 14))
+
+# Display the plot
+print(plot_large)
+
+# Optional: Save as large PDF
+ggsave("EPA_PM25_Hourly_Facets.pdf", plot_large, width = 15, height = 12)
+```
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# 1. Prepare daily average from 1-hour EPA data
+epa_hourly_daily_avg <- epa_1hr_clean %>%
+  filter(!is.na(sample_measurement)) %>%
+  mutate(date = as.Date(datetime_local)) %>%
+  group_by(date) %>%
+  summarise(hourly_avg = mean(sample_measurement, na.rm = TRUE), .groups = "drop")
+
+# 2. Prepare 24-hour EPA data
+epa_24hr_daily <- epa_site_data %>%
+  filter(sample_duration == "24 HOUR", !is.na(sample_measurement)) %>%
+  mutate(date = as.Date(date_local)) %>%
+  select(date, daily_24hr = sample_measurement)
+
+# 3. Merge both by date
+epa_daily_comparison <- full_join(epa_hourly_daily_avg, epa_24hr_daily, by = "date")
+
+# 4. Reshape for plotting
+library(tidyr)
+
+comparison_long <- epa_daily_comparison %>%
+  pivot_longer(cols = c(hourly_avg, daily_24hr),
+               names_to = "Source", values_to = "PM25") %>%
+  filter(!is.na(PM25))
+
+# 5. Plot
+ggplot(comparison_long, aes(x = date, y = PM25, color = Source)) +
+  geom_line(size = 0.7) +
+  labs(
+    title = "Comparison of Daily PM2.5: Hourly Avg vs. 24-Hour Reported (EPA)",
+    x = "Date",
+    y = expression("PM"[2.5]*" (µg/m³)"),
+    color = "Measurement Type"
+  ) +
+  scale_color_manual(values = c("hourly_avg" = "steelblue", "daily_24hr" = "firebrick")) +
+  theme_minimal(base_size = 13)
+```
+
+
+
+```{r}
+library(readr)
+library(dplyr)
+library(lubridate)
+
+# Load the data
+cleanincle_data <- read_csv("~/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
+
+# Convert time column to POSIXct and filter for PM2.5 values
+cleanincle_data <- cleanincle_data %>%
+  mutate(
+    datetime_parsed = as.POSIXct(time, format = "%Y-%m-%d %H:%M:%S", tz = "America/New_York")
+  ) %>%
+  filter(measure_name == "mc_pm2_5", !is.na(value))
+```
+# Daily Mean PM2.5 Plot
+```{r}
+
+library(ggplot2)
+
+
+daily_pm25 <- cleanincle_data %>%
+  mutate(date = as.Date(datetime_parsed)) %>%
+  group_by(date) %>%
+  summarise(mean_pm25 = mean(value, na.rm = TRUE)) %>%
+  ungroup()
+
+ggplot(daily_pm25, aes(x = date, y = mean_pm25)) +
+  geom_line(color = "steelblue", linewidth = 0.6) +
+  scale_x_date(
+    date_breaks = "1 month",
+    date_labels = "%b %Y",   # e.g., Nov 2024, Dec 2024
+    expand = c(0.01, 0.01)
+  ) +
+  labs(
+    title = "CLEANinCLE Daily Mean PM2.5 (Nov 2024 – May 2025)",
+    x = "Date",
+    y = expression("Mean PM"[2.5]*" (µg/m³)")
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)  # tilt x labels
+  )
+```
+```{r}
+
+```
+
+
 
 Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

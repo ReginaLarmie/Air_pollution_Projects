@@ -1,0 +1,369 @@
+---
+title: "new worksheet"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+# Load required packages
+library(RAQSAPI)
+library(purrr)
+library(readr)
+
+# EPA credentials
+aqs_credentials(username = "rnl34@case.edu", key = "copperhawk19")
+
+# Vector of site numbers 
+site_numbers <- c("0034", "0038", "0045", "0060", "0065")  
+
+# Define date range
+start_date <- as.Date("2024-11-01")
+end_date   <- as.Date("2025-05-01")
+
+# Loop through and download data for each site
+epa_data_list <- map(site_numbers, function(site) {
+  aqs_sampledata_by_site(
+    parameter = "88101",              # PM2.5
+    bdate = start_date,
+    edate = end_date,
+    stateFIPS = "39",                 # Ohio
+    countycode = "035",               # Cuyahoga
+    sitenum = site,
+    return_header = FALSE
+  )
+})
+
+# Assign a name to each element that is its site number
+names(epa_data_list) <- site_numbers
+
+# View one dataset (site "0060")
+head(epa_data_list[["0060"]])
+
+#Save each to its own CSV file
+walk2(epa_data_list, names(epa_data_list), ~ write_csv(.x, paste0("epa_pm25_site_", .y, ".csv")))
+```
+
+## Including Plots
+
+```{r}
+library(RAQSAPI)
+library(dplyr)
+library(purrr)
+
+# Set your credentials
+aqs_credentials(username = "rnl34@case.edu", key = "copperhawk19")
+
+# Site numbers to retrieve data from
+sites <- c("0034", "0038", "0045", "0060", "0065")
+
+# Define start and end dates in correct character format
+bdate <- "20241101"
+edate <- "20250501"
+
+# --- Function to get 1-hour data ---
+get_1hr_data <- function(site) {                      #Albert is confused about where values for site are defined
+  message(paste("Pulling 1-hour data for site", site))
+  tryCatch({
+    RAQSAPI::aqs_sampledata_by_site(
+      parameter = "88101",
+      bdate = bdate,
+      edate = edate,
+      stateFIPS = "39",
+      countycode = "035",
+      sitenum = site,
+      return_header = FALSE
+    ) %>%
+      filter(sample_duration == "1 HOUR") %>%
+      mutate(site_number = site, sample_type = "1hr")
+  }, error = function(e) {
+    message(paste("Failed for site", site, ":", e$message))
+    return(NULL)
+  })
+}
+
+# --- Function to get 24-hour data ---
+get_24hr_data <- function(site) {
+  message(paste("Pulling 24-hour data for site", site))
+  tryCatch({
+    RAQSAPI::aqs_sampledata_by_site(
+      parameter = "88101",
+      bdate = bdate,
+      edate = edate,
+      stateFIPS = "39",
+      countycode = "035",
+      sitenum = site,
+      return_header = FALSE
+    ) %>%
+      filter(sample_duration == "24 HOUR") %>%
+      mutate(site_number = site, sample_type = "24hr")
+  }, error = function(e) {
+    message(paste("Failed for site", site, ":", e$message))
+    return(NULL)
+  })
+}
+
+# --- Pull & combine ---
+epa_1hr_all_sites <- map_dfr(sites, get_1hr_data)
+epa_24hr_all_sites <- map_dfr(sites, get_24hr_data)
+```
+
+#  Combine All EPA Site Data into One Data Frame
+```{r}
+library(dplyr)
+
+# Combine all site data into one data frame
+epa_all_sites_raw <- bind_rows(epa_data_list, .id = "site_number")  # The .id is unnecessary
+
+# Filter to Keep Only PM2.5 1-HOUR Measurements
+epa_1hr_clean <- epa_all_sites_raw %>%
+  filter(sample_duration == "1 HOUR", !is.na(sample_measurement)) %>%
+  mutate(
+    datetime_local = as.POSIXct(paste(date_local, time_local),
+                                format = "%Y-%m-%d %H:%M",
+                                tz = "America/New_York"),
+    date = as.Date(datetime_local)
+  )
+
+# Preview the Cleaned 1-Hour Data
+glimpse(epa_1hr_clean)
+```
+```{r}
+# Use this on any dataframe, e.g., epa_1hr_all_sites or cleanincle_data
+
+na_counts <- sapply(epa_1hr_all_sites, function(x) sum(is.na(x)))
+na_summary <- data.frame(Column = names(na_counts), NA_Count = na_counts)
+
+# View the result
+print(na_summary)
+
+na_summary_sorted <- na_summary %>% arrange(desc(NA_Count))
+print(na_summary_sorted)
+```
+
+
+# Calculate Daily Averages by Site
+```{r}
+epa_1hr_daily_avg <- epa_1hr_clean %>%
+  group_by(site_number, date) %>%
+  summarise(daily_avg_pm25 = mean(sample_measurement, na.rm = TRUE), .groups = "drop")
+
+
+# Daily PM2.5 Trend for All Sites
+library(ggplot2)
+library(dplyr)
+
+# Create plots for each site
+unique_sites <- unique(epa_1hr_daily_avg$site_number)
+
+for (site in unique_sites) {
+  site_data <- epa_1hr_daily_avg %>% filter(site_number == site)
+
+  p <- ggplot(site_data, aes(x = date, y = daily_avg_pm25)) +
+    geom_line(color = "steelblue", linewidth = 0.6) +
+    labs(
+      title = paste("Daily Average PM2.5 (1-Hour Data) - Site", site),
+      x = "Date",
+      y = expression("PM"[2.5]*" (µg/m³)")
+    ) +
+    scale_x_date(date_breaks = "1 month", date_labels = "%b\n%Y") +
+    theme_minimal(base_size = 13)
+
+  print(p)  # Show the plot
+
+  # Optionally save
+  ggsave(filename = paste0("pm25_daily_avg_site_", site, ".png"), plot = p, width = 8, height = 4.5)
+}
+
+```
+
+```{r}
+library(readr)
+library(dplyr)
+library(lubridate)
+
+# Vector of site numbers
+site_numbers <- c("0034", "0038", "0045", "0060", "0065")
+
+# Read and combine all 24-hour data files
+epa_24hr_clean <- bind_rows(
+  lapply(site_numbers, function(site) {
+    read_csv(paste0("epa_pm25_site_", site, ".csv")) %>%
+      filter(sample_duration == "24 HOUR") %>%
+      mutate(
+        site_number = site,
+        date = as.Date(date_local),
+        pm25 = sample_measurement
+      ) %>%
+      select(site_number, date, pm25)
+  })
+)
+
+library(ggplot2)
+
+unique_sites_24hr <- unique(epa_24hr_clean$site_number)
+
+for (site in unique_sites_24hr) {
+  site_data <- epa_24hr_clean %>% filter(site_number == site)
+
+  p <- ggplot(site_data, aes(x = date, y = pm25)) +
+    geom_line(color = "firebrick", linewidth = 0.6) +
+    labs(
+      title = paste("Daily PM2.5 (24-Hour Sample) - Site", site),
+      x = "Date",
+      y = expression("PM"[2.5]*" (µg/m³)")
+    ) +
+    scale_x_date(date_breaks = "1 month", date_labels = "%b\n%Y") +
+    theme_minimal(base_size = 13)
+
+  print(p)
+  ggsave(filename = paste0("pm25_24hr_site_", site, ".png"), plot = p, width = 8, height = 4.5)
+}
+
+```
+
+
+
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+
+site_numbers <- c("0034", "0038", "0045", "0060", "0065")
+
+for (site in site_numbers) {
+  # Read both datasets
+  data <- read_csv(paste0("epa_pm25_site_", site, ".csv"))
+
+  # Clean and prepare 1-hour data
+  hourly_data <- data %>%
+    filter(sample_duration == "1 HOUR", !is.na(sample_measurement)) %>%
+    mutate(
+      datetime = as.POSIXct(paste(date_local, time_local), format = "%Y-%m-%d %H:%M"),
+      date = as.Date(datetime)
+    ) %>%
+    group_by(date) %>%
+    summarise(mean_pm25 = mean(sample_measurement, na.rm = TRUE), .groups = "drop") %>%
+    mutate(type = "1-Hour Avg")
+
+  # Clean and prepare 24-hour data
+  daily_data <- data %>%
+    filter(sample_duration == "24 HOUR", !is.na(sample_measurement)) %>%
+    mutate(
+      date = as.Date(date_local),
+      mean_pm25 = sample_measurement,
+      type = "24-Hour Avg"
+    ) %>%
+    select(date, mean_pm25, type)
+
+  # Combine both datasets
+  combined_data <- bind_rows(hourly_data, daily_data)
+
+  # Plot comparison
+  p <- ggplot(combined_data, aes(x = date, y = mean_pm25, color = type)) +
+    geom_line(size = 0.6) +
+    labs(
+      title = paste("PM2.5 Comparison: 1-Hour vs 24-Hour Data (Site", site, ")"),
+      x = "Date",
+      y = expression("PM"[2.5]*" (µg/m³)"),
+      color = "Measurement Type"
+    ) +
+    scale_x_date(date_breaks = "1 month", date_labels = "%b\n%Y") +
+    theme_minimal(base_size = 13)
+
+  print(p)
+}
+
+```
+
+#Filter and Prepare Data for 2-Hour Aggregation
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+# Filter for sites 0034 and 0038
+epa_2sites <- epa_1hr_clean %>%
+  filter(site_number %in% c("0034", "0038"))
+
+# Round datetime to the nearest 2-hour window
+epa_2sites <- epa_2sites %>%
+  mutate(datetime_2hr = floor_date(datetime_local, unit = "2 hours"))
+
+# Calculate 2-hour average for each site
+epa_2hr_avg <- epa_2sites %>%
+  group_by(site_number, datetime_2hr) %>%
+  summarise(avg_pm25 = mean(sample_measurement, na.rm = TRUE), .groups = "drop")
+
+ggplot(epa_2hr_avg, aes(x = datetime_2hr, y = avg_pm25, color = site_number)) +
+  geom_line(linewidth = 0.6) +
+  labs(
+    title = "24-Hour Average PM2.5: Site 0034 vs Site 0038",
+    x = "Date & Time",
+    y = expression("PM"[2.5]*" (µg/m³)"),
+    color = "Site"
+  ) +
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b\n%Y") +
+  theme_minimal(base_size = 13)
+
+```
+
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+
+site_numbers <- c("0034", "0038", "0045", "0060", "0065")
+
+for (site in site_numbers) {
+  # Load data
+  data <- read_csv(paste0("epa_pm25_site_", site, ".csv"))
+
+  # Clean 1-hour data and compute daily average
+  hourly_avg <- data %>%
+    filter(sample_duration == "1 HOUR", !is.na(sample_measurement)) %>%
+    mutate(
+      datetime = as.POSIXct(paste(date_local, time_local), format = "%Y-%m-%d %H:%M"),
+      date = as.Date(datetime)
+    ) %>%
+    group_by(date) %>%
+    summarise(pm25_1hr_avg = mean(sample_measurement, na.rm = TRUE), .groups = "drop")
+
+  # Clean 24-hour data
+  daily_avg <- data %>%
+    filter(sample_duration == "24 HOUR", !is.na(sample_measurement)) %>%
+    mutate(date = as.Date(date_local)) %>%
+    select(date, pm25_24hr_avg = sample_measurement)
+
+  # Merge datasets by date
+  compare_data <- inner_join(hourly_avg, daily_avg, by = "date")
+
+  # Scatter plot
+  p <- ggplot(compare_data, aes(x = pm25_24hr_avg, y = pm25_1hr_avg)) +
+    geom_point(color = "darkgreen", alpha = 0.7, size = 2) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray") +
+    labs(
+      title = paste("PM2.5: 1-Hour vs 24-Hour (Site", site, ")"),
+      x = expression("24-Hour Avg PM"[2.5]*" (µg/m³)"),
+      y = expression("1-Hour Avg PM"[2.5]*" (µg/m³)")
+    ) +
+    theme_minimal(base_size = 13)
+
+  print(p)
+}
+```
+
+```{r}
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
