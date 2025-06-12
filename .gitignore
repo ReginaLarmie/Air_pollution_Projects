@@ -1,0 +1,36 @@
+# RStudio project files
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+# R build files
+.Rbuildignore
+
+# Session files
+.Rapp.history
+
+# OS-generated files
+.DS_Store  # macOS
+Thumbs.db  # Windows
+
+# Logs and temporary files
+*.log
+*.aux
+*.out
+*.toc
+
+# Quarto/Markdown/knitr cache
+*_cache/
+cache/
+*.utf8.md
+*.knit.md
+*.nb.html
+*.Rmd~
+
+# Renviron (if personal or machine-specific)
+.Renviron
+
+# Python virtual environments (if applicable)
+venv/
+
