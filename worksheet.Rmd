@@ -365,5 +365,93 @@ for (site in site_numbers) {
 }
 ```
 
+
+```{r}
+# Load libraries
+library(dplyr)
+library(tidyr)
+library(GGally)
+library(readr)
+library(lubridate)
+
+# STEP 1: Load and combine EPA data for all sites (if not already done)
+site_numbers <- c("0034", "0038", "0045", "0060", "0065")
+
+epa_1hr_clean <- bind_rows(
+  lapply(site_numbers, function(site) {
+    read_csv(paste0("epa_pm25_site_", site, ".csv")) %>%
+      filter(sample_duration == "1 HOUR", !is.na(sample_measurement)) %>%
+      mutate(
+        site_number = site,
+        datetime = as.POSIXct(paste(date_local, time_local), format = "%Y-%m-%d %H:%M", tz = "America/New_York"),
+        date = as.Date(datetime)
+      ) %>%
+      group_by(site_number, date) %>%
+      summarise(pm25 = mean(sample_measurement, na.rm = TRUE), .groups = "drop")
+  })
+)
+
+# STEP 2: Reshape to wide format
+epa_1hr_wide <- epa_1hr_clean %>%
+  pivot_wider(names_from = site_number, values_from = pm25, values_fn = mean)
+
+# STEP 3: Rename columns for clarity
+names(epa_1hr_wide)[-1] <- paste0("Site_", names(epa_1hr_wide)[-1])
+
+# STEP 4: Filter out rows with too many NAs (optional)
+epa_1hr_wide_filtered <- epa_1hr_wide %>%
+  filter(rowSums(is.na(.)) < 3)
+
+# STEP 5: Convert site columns to numeric
+epa_1hr_wide_numeric <- epa_1hr_wide_filtered %>%
+  mutate(across(-date, ~ as.numeric(unlist(.))))
+
+# STEP 6: Create 5x5 matrix plot
+ggpairs(
+  data = epa_1hr_wide_numeric[, -1],  # exclude date column
+  upper = list(continuous = wrap("points", alpha = 0.6, size = 1)),
+  lower = list(continuous = wrap("smooth", alpha = 0.6, size = 0.8)),
+  diag = list(continuous = wrap("densityDiag", alpha = 0.4))
+)
+```
+
+# 5×5 grid of scatter plots using the optical sensor (1-hour) daily averages from EPA data:
+```{r}
+
+# Load required libraries
+library(dplyr)
+library(tidyr)
+library(GGally)
+library(readr)
+
+# Compute daily average PM2.5 for each site from 1-hour data
+epa_1hr_daily <- epa_1hr_clean %>%
+  group_by(site_number, date) %>%
+  summarise(pm25 = mean(sample_measurement, na.rm = TRUE), .groups = "drop")
+
+# Reshape to wide format: each site in its own column
+epa_1hr_wide <- epa_1hr_daily %>%
+  pivot_wider(names_from = site_number, values_from = pm25, values_fn = mean)  
+
+# Rename columns for clarity
+names(epa_1hr_wide)[-1] <- paste0("Site_", names(epa_1hr_wide)[-1])
+
+# Remove rows with too many missing values (optional)
+epa_1hr_wide_clean <- epa_1hr_wide %>%
+  filter(rowSums(is.na(.)) < 3)
+
+# Convert all site columns to numeric
+epa_1hr_wide_clean <- epa_1hr_wide_clean %>%
+  mutate(across(-date, ~ as.numeric(unlist(.))))
+
+# Generate the 5×5 scatterplot matrix
+ggpairs(
+  data = epa_1hr_wide_clean[, -1],  # Remove date column
+  upper = list(continuous = wrap("points", alpha = 0.6, size = 1)),
+  lower = list(continuous = wrap("smooth", alpha = 0.6, size = 0.8)),
+  diag = list(continuous = wrap("densityDiag", alpha = 0.4))
+)
+```
+
 ```{r}
 Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

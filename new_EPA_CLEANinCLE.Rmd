@@ -79,10 +79,7 @@ epa_all_data %>%
   summary()
 ```
 
-```{r}
 
-
-```
 #  Combine All EPA Site Data into One Data Frame
 ```{r}
 
@@ -273,7 +270,7 @@ library(dplyr)
 library(lubridate)
 
 # Load CLEANinCLE raw data
-cleanincle_data <- read_csv("~/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
+cleanincle_data <- read_csv("~/Documents/R_Projects/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
 
 # Convert time column and filter for PM2.5 values
 cleanincle_data <- cleanincle_data %>%
@@ -344,134 +341,6 @@ for (site in site_numbers) {
 ```
 
 
-# 5×5 grid of scatter plots comparing EPA 24-hour PM2.5 data across all sites:
-```{r}
-# Load necessary libraries
-library(dplyr)
-library(tidyr)
-library(readr)
-
-# Compute average PM2.5 per site per day 
-epa_24hr_clean_avg <- epa_24hr_clean %>%
-  group_by(site_number, date) %>%
-  summarise(pm25 = mean(pm25, na.rm = TRUE), .groups = "drop")
-
-#  Reshape data from long to wide format
-epa_24hr_wide <- epa_24hr_clean_avg %>%
-  pivot_wider(names_from = site_number, values_from = pm25)
-
-# Rename site columns for easier plotting labels
-names(epa_24hr_wide)[-1] <- paste0("Site_", names(epa_24hr_wide)[-1])
-
-# Filter out rows with 3 or more missing site values
-epa_24hr_wide_clean <- epa_24hr_wide %>%
-  filter(rowSums(is.na(.)) < 3)
-
-# Convert all site columns to numeric to avoid errors in ggpairs
-epa_24hr_wide_clean_numeric <- epa_24hr_wide_clean %>%
-  mutate(across(-date, as.numeric))
-
-# Load GGally for ggpairs function
-library(GGally)
-
-# Plot using ggpairs (excluding the date column)
-ggpairs(
-  data = epa_24hr_wide_clean_numeric[, -1],  # drop the 'date' column
-  title = "EPA 24-Hour PM2.5: Site-to-Site Comparison",
-  upper = list(continuous = wrap("points", alpha = 0.6, size = 0.8)),
-  diag  = list(continuous = wrap("densityDiag", alpha = 0.4)),
-  lower = list(continuous = wrap("smooth", alpha = 0.6, size = 0.6))
-)
-```
-
-
-# 5×5 grid of scatter plots using the optical sensor (1-hour) daily averages from EPA data:
-```{r}
-# Load required libraries
-library(dplyr)
-library(tidyr)
-library(GGally)
-library(readr)
-
-# Compute daily average PM2.5 for each site from 1-hour data
-epa_1hr_daily <- epa_1hr_clean %>%
-  group_by(site_number, date) %>%
-  summarise(pm25 = mean(sample_measurement, na.rm = TRUE), .groups = "drop")
-
-# Reshape to wide format: each site in its own column
-epa_1hr_wide <- epa_1hr_daily %>%
-  pivot_wider(names_from = site_number, values_from = pm25, values_fn = mean)  
-
-# Rename columns for clarity
-names(epa_1hr_wide)[-1] <- paste0("Site_", names(epa_1hr_wide)[-1])
-
-# Remove rows with too many missing values (optional)
-epa_1hr_wide_clean <- epa_1hr_wide %>%
-  filter(rowSums(is.na(.)) < 3)
-
-# Convert all site columns to numeric
-epa_1hr_wide_clean <- epa_1hr_wide_clean %>%
-  mutate(across(-date, ~ as.numeric(unlist(.))))
-
-# Generate the 5×5 scatterplot matrix
-ggpairs(
-  data = epa_1hr_wide_clean[, -1],  # Remove date column
-  upper = list(continuous = wrap("points", alpha = 0.6, size = 1)),
-  lower = list(continuous = wrap("smooth", alpha = 0.6, size = 0.8)),
-  diag = list(continuous = wrap("densityDiag", alpha = 0.4))
-)
-```
-
-```{r}
-# Load libraries
-library(dplyr)
-library(tidyr)
-library(GGally)
-library(readr)
-library(lubridate)
-
-# STEP 1: Load and combine EPA data for all sites (if not already done)
-site_numbers <- c("0034", "0038", "0045", "0060", "0065")
-
-epa_1hr_clean <- bind_rows(
-  lapply(site_numbers, function(site) {
-    read_csv(paste0("epa_pm25_site_", site, ".csv")) %>%
-      filter(sample_duration == "1 HOUR", !is.na(sample_measurement)) %>%
-      mutate(
-        site_number = site,
-        datetime = as.POSIXct(paste(date_local, time_local), format = "%Y-%m-%d %H:%M", tz = "America/New_York"),
-        date = as.Date(datetime)
-      ) %>%
-      group_by(site_number, date) %>%
-      summarise(pm25 = mean(sample_measurement, na.rm = TRUE), .groups = "drop")
-  })
-)
-
-# STEP 2: Reshape to wide format
-epa_1hr_wide <- epa_1hr_clean %>%
-  pivot_wider(names_from = site_number, values_from = pm25, values_fn = mean)
-
-# STEP 3: Rename columns for clarity
-names(epa_1hr_wide)[-1] <- paste0("Site_", names(epa_1hr_wide)[-1])
-
-# STEP 4: Filter out rows with too many NAs (optional)
-epa_1hr_wide_filtered <- epa_1hr_wide %>%
-  filter(rowSums(is.na(.)) < 3)
-
-# STEP 5: Convert site columns to numeric
-epa_1hr_wide_numeric <- epa_1hr_wide_filtered %>%
-  mutate(across(-date, ~ as.numeric(unlist(.))))
-
-# STEP 6: Create 5x5 matrix plot
-ggpairs(
-  data = epa_1hr_wide_numeric[, -1],  # exclude date column
-  upper = list(continuous = wrap("points", alpha = 0.6, size = 1)),
-  lower = list(continuous = wrap("smooth", alpha = 0.6, size = 0.8)),
-  diag = list(continuous = wrap("densityDiag", alpha = 0.4))
-)
-
-```
-
 ```{r}
 library(RAQSAPI)
 
@@ -495,306 +364,26 @@ head(cleanincle_coords)
 
 
 ```{r}
-library(dplyr)
-library(ggplot2)
-library(readr)
-
-# Mapping of EPA site to CLEANinCLE device_eui
-site_device_map <- list(
-  "0034" = "0004A30B00084CF2",
-  "0038" = "0004A30B00085131",
-  "0045" = "0004A30B00085575",
-  "0060" = "0004A30B00087263",
-  "0065" = "0004A30B00085FFF"
-)
-
-# Loop through each EPA site and its matched CLEANinCLE sensor
-for (site in names(site_device_map)) {
-  
-  device <- site_device_map[[site]]
-  
-  # Get EPA 24-hour data for the site
-  epa_site_data <- epa_24hr_clean %>%
-    filter(site_number == site) %>%
-    select(date, pm25_epa = pm25)
-  
-  # Get CLEANinCLE daily average for the matched device
-  cleanincle_device_data <- cleanincle_data %>%
-    filter(device_eui == device, measure_name == "mc_pm2_5", !is.na(value)) %>%
-    mutate(date = as.Date(time)) %>%
-    group_by(date) %>%
-    summarise(pm25_cleanincle = mean(value, na.rm = TRUE), .groups = "drop")
-  
-  # Join by date
-  comparison_df <- inner_join(epa_site_data, cleanincle_device_data, by = "date")
-  
-  # Plot comparison
-  p <- ggplot(comparison_df, aes(x = pm25_cleanincle, y = pm25_epa)) +
-    geom_point(color = "darkblue", alpha = 0.7, size = 2) +
-    geom_smooth(method = "lm", color = "red", linewidth = 0.8, se = FALSE) +
-    labs(
-      title = paste("PM2.5 Comparison - EPA Site", site, "vs CLEANinCLE", device),
-      x = "CLEANinCLE Daily Avg PM2.5 (µg/m³)",
-      y = "EPA 24-Hour PM2.5 (µg/m³)"
-    ) +
-    theme_minimal(base_size = 13)
-  
-  print(p)
-}
-
-
-```
-
-
-```{r}
-# Load required libraries
-library(dplyr)
-library(tidyr)
-library(ggplot2)
-library(gridExtra)
-library(readr)
-
-# STEP 1: Prepare wide-format data
-epa_24hr_wide <- epa_24hr_clean %>%
-  pivot_wider(names_from = site_number, values_from = pm25, values_fn = mean) %>%
-  filter(rowSums(is.na(.)) < 3) %>%
-  mutate(across(-date, as.numeric))  # Ensure numeric columns except 'date'
-
-# STEP 2: Set up
-site_names <- sort(unique(epa_24hr_clean$site_number))
-n_sites <- length(site_names)
-
-# Define axis range for consistency across all plots
-axis_min <- 0
-axis_max <- ceiling(max(epa_24hr_wide[site_names], na.rm = TRUE))
-
-# STEP 3: Create pairwise comparison plots (lower triangle only)
-plot_list <- list()
-
-for (i in seq_len(n_sites)) {
-  for (j in seq_len(n_sites)) {
-    
-    if (j >= i) next  # Only lower triangle
-    
-    x_site <- site_names[j]
-    y_site <- site_names[i]
-    
-    df_pair <- epa_24hr_wide %>%
-      select(all_of(c(x_site, y_site))) %>%
-      rename(x = all_of(x_site), y = all_of(y_site)) %>%
-      filter(!is.na(x) & !is.na(y))
-    
-    # Compute R²
-    r2_text <- if (nrow(df_pair) > 2) {
-      r2 <- summary(lm(y ~ x, data = df_pair))$r.squared
-      paste0("R² = ", round(r2, 2))
-    } else {
-      "R² = NA"
-    }
-    
-    # Build the plot
-    p <- ggplot(df_pair, aes(x = x, y = y)) +
-      geom_point(color = "steelblue", size = 1.8, alpha = 0.7) +
-      geom_smooth(method = "lm", se = FALSE, color = "red", linewidth = 0.9) +
-      geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
-      coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
-      labs(
-        x = paste("Site", x_site),
-        y = paste("Site", y_site),
-        subtitle = r2_text
-      ) +
-      theme_minimal(base_size = 14) +
-      theme(
-        plot.subtitle = element_text(hjust = 0.5, size = 12),
-        axis.title = element_text(size = 12),
-        axis.text = element_text(size = 10),
-        plot.margin = margin(10, 10, 10, 10)
-      )
-    
-    plot_list[[length(plot_list) + 1]] <- p
-  }
-}
-
-# STEP 4: Save the 5x5 grid to a high-res PDF
-pdf("EPA_PM25_Pairwise_Comparison_5x5.pdf", width = 18, height = 18)
-grid.arrange(grobs = plot_list, ncol = 5, nrow = 5)
-dev.off()
-```
-
-```{r}
-# Load libraries
-library(dplyr)
-library(tidyr)
-library(ggplot2)
-library(gridExtra)
-
-# STEP 1: Prepare wide-format data
-epa_24hr_wide <- epa_24hr_clean %>%
-  pivot_wider(names_from = site_number, values_from = pm25, values_fn = mean) %>%
-  filter(rowSums(is.na(.)) < 3)
-
-# Force numeric site names (e.g., convert "0034" to 34)
-site_names <- sort(unique(epa_24hr_clean$site_number))
-
-# Ensure columns are numeric
-epa_24hr_wide <- epa_24hr_wide %>%
-  mutate(across(all_of(site_names), as.numeric))
-
-# STEP 2: Force fixed axis
-axis_min <- 0
-axis_max <- 28  # Enough to cover all your data
-
-plot_list <- list()
-n_sites <- length(site_names)
-
-for (i in seq_len(n_sites)) {
-  for (j in seq_len(n_sites)) {
-    if (j >= i) next
-
-    x_site <- site_names[j]
-    y_site <- site_names[i]
-
-    df_pair <- epa_24hr_wide %>%
-      select(all_of(c(x_site, y_site))) %>%
-      rename(x = all_of(x_site), y = all_of(y_site)) %>%
-      filter(!is.na(x) & !is.na(y))
-
-    r2_text <- if (nrow(df_pair) > 2) {
-      r2 <- summary(lm(y ~ x, data = df_pair))$r.squared
-      paste0("R² = ", round(r2, 2))
-    } else {
-      "R² = NA"
-    }
-
-    p <- ggplot(df_pair, aes(x = x, y = y)) +
-      geom_point(color = "steelblue", size = 2, alpha = 0.7) +
-      geom_smooth(method = "lm", se = FALSE, color = "red", linewidth = 1) +
-      geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
-      scale_x_continuous(limits = c(axis_min, axis_max), expand = c(0, 0)) +
-      scale_y_continuous(limits = c(axis_min, axis_max), expand = c(0, 0)) +
-      labs(
-        x = paste("Site", x_site),
-        y = paste("Site", y_site),
-        subtitle = r2_text
-      ) +
-      theme_minimal(base_size = 16) +
-      theme(
-        plot.subtitle = element_text(hjust = 0.5, size = 14),
-        axis.title = element_text(size = 14),
-        axis.text = element_text(size = 12),
-        plot.margin = margin(12, 12, 12, 12)
-      )
-
-    plot_list[[length(plot_list) + 1]] <- p
-  }
-}
-
-# STEP 3: Save to multi-page PDF in 4x4 grids
-pdf("EPA_PM25_Pairwise_Comparison_4x4_FINAL_FIXEDAXIS.pdf", width = 18, height = 18)
-
-for (k in seq_len(ceiling(length(plot_list) / 16))) {
-  start <- (k - 1) * 16 + 1
-  end <- min(k * 16, length(plot_list))
-  grid.arrange(grobs = plot_list[start:end], ncol = 4, nrow = 4)
-}
-
-dev.off()
-```
-
-```{r}
-library(dplyr)
-library(tidyr)
-library(ggplot2)
-library(gridExtra)
-
-# STEP 1: Calculate daily averages from 1-hour data
-epa_1hr_daily_avg <- epa_1hr_clean %>%
-  group_by(site_number, date) %>%
-  summarise(pm25 = mean(pm25, na.rm = TRUE), .groups = "drop")
-
-# STEP 2: Pivot to wide format
-epa_1hr_wide <- epa_1hr_daily_avg %>%
-  pivot_wider(names_from = site_number, values_from = pm25) %>%
-  filter(rowSums(is.na(.)) < 3) %>%
-  mutate(across(-date, as.numeric))
-
-# STEP 3: Setup
-site_names <- colnames(epa_1hr_wide)[-1]
-n_sites <- length(site_names)
-axis_max <- ceiling(max(epa_1hr_wide[site_names], na.rm = TRUE))
-axis_min <- floor(min(epa_1hr_wide[site_names], na.rm = TRUE))
-
-# STEP 4: Build lower triangle plots
-plot_list <- list()
-
-for (i in seq_len(n_sites)) {
-  for (j in seq_len(n_sites)) {
-    if (j >= i) next
-
-    x_site <- site_names[j]
-    y_site <- site_names[i]
-
-    df_pair <- epa_1hr_wide %>%
-      select(all_of(c(x_site, y_site))) %>%
-      rename(x = all_of(x_site), y = all_of(y_site)) %>%
-      filter(!is.na(x) & !is.na(y))
-
-    r2 <- if (nrow(df_pair) > 2) round(summary(lm(y ~ x, data = df_pair))$r.squared, 2) else NA
-
-    p <- ggplot(df_pair, aes(x = x, y = y)) +
-      geom_point(color = "steelblue", size = 3, alpha = 0.6) +
-      geom_smooth(method = "lm", se = FALSE, color = "red", linewidth = 1) +
-      geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray40") +
-      coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
-      labs(
-        x = paste("Site", x_site),
-        y = paste("Site", y_site),
-        subtitle = if (!is.na(r2)) paste("R² =", r2) else NULL
-      ) +
-      theme_minimal(base_size = 16) +
-      theme(
-        axis.text = element_text(size = 14),
-        axis.title = element_text(size = 15),
-        plot.subtitle = element_text(size = 14, hjust = 0.5),
-        plot.margin = margin(10, 10, 10, 10)
-      )
-
-    plot_list[[length(plot_list) + 1]] <- p
-  }
-}
-
-# STEP 5: Arrange in 5x5 grid layout and save
-grid_plot <- grid.arrange(grobs = plot_list, ncol = 5, nrow = 5)
-
-ggsave(
-  filename = "EPA_PM25_1hr_LowerTriangleGrid_Improved.png",
-  plot = grid_plot,
-  width = 22, height = 22, dpi = 300
-)
-```
-
-
-```{r}
 # Load required libraries
 library(dplyr)
 library(tidyr)
 library(ggplot2)
 library(gridExtra)
 
-# STEP 1: Prepare wide-format data
+# Wide-format data
 epa_24hr_wide <- epa_24hr_clean %>%
   pivot_wider(names_from = site_number, values_from = pm25, values_fn = mean) %>%
   filter(rowSums(is.na(.)) < 3)
 
-# STEP 2: Get valid site names (excluding 'date' column)
+# valid site names (excluding 'date' column)
 site_names <- setdiff(names(epa_24hr_wide), "date")
 n_sites <- length(site_names)
 
-# STEP 3: Set consistent axis limits
+# Consistent axis limits
 axis_min <- 0
 axis_max <- 28
 
-# STEP 4: Create all 25 plots with scatter + regression
+# 25 plots with scatter + regression
 plot_list <- list()
 
 for (i in seq_len(n_sites)) {
@@ -840,14 +429,588 @@ for (i in seq_len(n_sites)) {
   }
 }
 
-# STEP 5: Save all 25 plots to a large high-quality PDF
-pdf("EPA_PM25_All25_Scatter_Regression.pdf", width = 22, height = 22)
+# Save 5x5 grid to a high-res PDF
+pdf("EPA_PM25_Scatter_Regression.pdf", width = 22, height = 22)
 grid.arrange(grobs = plot_list, ncol = n_sites, nrow = n_sites)
 dev.off()
 ```
 
-~/Air_pollution_Projects
 
+```{r}
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(lubridate)
+
+# Vector of co-located EPA site numbers
+site_numbers <- c("0034", "0038", "0045", "0060", "0065")
+
+# xDaily average for CLEANinCLE
+cleanincle_daily_avg <- cleanincle_data %>%
+  group_by(date) %>%
+  summarise(pm25_cleanincle = mean(value, na.rm = TRUE), .groups = "drop")
+
+# Step 2: Initialize empty plot list
+plot_list <- list()
+
+# Step 3: Loop through each co-located site
+for (site in site_numbers) {
+  
+  # Filter EPA data for site
+  epa_24hr_site <- epa_24hr_clean %>%
+    filter(site_number == site) %>%
+    select(date, pm25_epa = pm25)
+
+  # Join with CLEANinCLE daily avg on date
+  comparison_df <- inner_join(cleanincle_daily_avg, epa_24hr_site, by = "date") %>%
+    filter(!is.na(pm25_cleanincle) & !is.na(pm25_epa))
+
+  # Calculate R²
+  r2_text <- if (nrow(comparison_df) > 2) {
+    r2 <- summary(lm(pm25_epa ~ pm25_cleanincle, data = comparison_df))$r.squared
+    paste0("R² = ", round(r2, 2))
+  } else {
+    "R² = NA"
+  }
+
+  # Create plot
+  p <- ggplot(comparison_df, aes(x = pm25_cleanincle, y = pm25_epa)) +
+    geom_point(color = "steelblue", size = 2, alpha = 0.75) +
+    geom_smooth(method = "lm", se = FALSE, color = "red", linewidth = 0.9) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+    coord_fixed(xlim = c(0, 28), ylim = c(0, 28)) +
+    labs(
+      title = paste("CLEANinCLE vs EPA 24-Hour PM2.5 (Site", site, ")"),
+      subtitle = r2_text,
+      x = "CLEANinCLE Daily Avg PM2.5 (µg/m³)",
+      y = "EPA 24-Hour PM2.5 (µg/m³)"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(size = 14, face = "bold"),
+      plot.subtitle = element_text(size = 12, hjust = 0.5),
+      axis.title = element_text(size = 12)
+    )
+
+  # Save to list
+  plot_list[[site]] <- p
+}
+
+# Step 4: Save all site plots to one PDF
+pdf("CLEANinCLE_vs_EPA_PM25_Comparison_All_Sites.pdf", width = 10, height = 6 * length(plot_list))
+for (p in plot_list) print(p)
+dev.off()
+```
+
+
+<pre>
+```{r cleanincle-vs-epa, fig.height=6, fig.width=10, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+
+site_numbers <- c("0034", "0038", "0045", "0060", "0065")
+
+# CLEANinCLE daily average
+cleanincle_daily_avg <- cleanincle_data %>%
+  group_by(date) %>%
+  summarise(pm25_cleanincle = mean(value, na.rm = TRUE), .groups = "drop")
+
+# Create list to save PDF plots
+plot_list <- list()
+
+# Create and show/save plots
+for (site in site_numbers) {
+  # EPA filter data for site
+  epa_24hr_site <- epa_24hr_clean %>%
+    filter(site_number == site) %>%
+    select(date, pm25_epa = pm25)
+
+  # Join datasets by date
+  comparison_df <- inner_join(cleanincle_daily_avg, epa_24hr_site, by = "date") %>%
+    filter(!is.na(pm25_cleanincle) & !is.na(pm25_epa))
+
+  # Compute R²
+  r2_text <- if (nrow(comparison_df) > 2) {
+    r2 <- summary(lm(pm25_epa ~ pm25_cleanincle, data = comparison_df))$r.squared
+    paste0("R² = ", round(r2, 2))
+  } else {
+    "R² = NA"
+  }
+
+  # Generate plot
+  p <- ggplot(comparison_df, aes(x = pm25_cleanincle, y = pm25_epa)) +
+    geom_point(color = "steelblue", size = 2, alpha = 0.75) +
+    geom_smooth(method = "lm", se = FALSE, color = "red", linewidth = 0.9) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+    coord_fixed(xlim = c(0, 28), ylim = c(0, 28)) +
+    labs(
+      title = paste("CLEANinCLE vs EPA 24-Hour PM2.5 (Site", site, ")"),
+      subtitle = r2_text,
+      x = "CLEANinCLE Daily Avg PM2.5 (µg/m³)",
+      y = "EPA 24-Hour PM2.5 (µg/m³)"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(size = 14, face = "bold"),
+      plot.subtitle = element_text(size = 12, hjust = 0.5),
+      axis.title = element_text(size = 12)
+    )
+
+  # Show inline
+  print(p)
+
+  # Save individual PNG
+  ggsave(filename = paste0("cleanincle_vs_epa_", site, ".png"), plot = p, width = 8, height = 6)
+
+  # Store for multi-page PDF
+  plot_list[[site]] <- p
+}
+
+# Save all plots to a single PDF
+pdf("cleanincle_vs_epa_all_sites.pdf", width = 10, height = 6)
+for (p in plot_list) print(p)
+dev.off()
+```
+
+
+```{r epa-5x5-filter-grid, fig.width=22, fig.height=22, echo=FALSE, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(gridExtra)
+
+# Step 1: Reshape to wide format (site columns)
+epa_wide <- epa_24hr_clean %>%
+  select(date, site_number, pm25) %>%
+  pivot_wider(names_from = site_number, values_from = pm25, values_fn = mean) %>%
+  filter(rowSums(is.na(.)) < 3)
+
+# Step 2: Define site list
+site_names <- sort(setdiff(names(epa_wide), "date"))
+n_sites <- length(site_names)
+axis_min <- 0
+axis_max <- 28
+
+# Step 3: Build plot matrix
+plot_matrix <- vector("list", n_sites * n_sites)
+
+for (i in seq_len(n_sites)) {
+  for (j in seq_len(n_sites)) {
+    x_site <- site_names[j]
+    y_site <- site_names[i]
+    index <- (i - 1) * n_sites + j
+
+    df_pair <- epa_wide %>%
+      select(x = all_of(x_site), y = all_of(y_site)) %>%
+      filter(!is.na(x) & !is.na(y))
+
+    r2_text <- if (nrow(df_pair) > 2) {
+      r2 <- summary(lm(y ~ x, data = df_pair))$r.squared
+      paste0("R² = ", round(r2, 2))
+    } else {
+      "R² = NA"
+    }
+
+    p <- ggplot(df_pair, aes(x = x, y = y)) +
+      geom_point(color = "steelblue", alpha = 0.7, size = 1.8) +
+      geom_smooth(method = "lm", se = FALSE, color = "red", linewidth = 1) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+      coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
+      labs(
+        x = paste("Site", x_site),
+        y = paste("Site", y_site),
+        subtitle = r2_text
+      ) +
+      theme_minimal(base_size = 12) +
+      theme(
+        plot.subtitle = element_text(size = 10, hjust = 0.5),
+        axis.title = element_text(size = 10),
+        axis.text = element_text(size = 9),
+        plot.margin = margin(5, 5, 5, 5)
+      )
+
+    plot_matrix[[index]] <- p
+  }
+}
+
+# Step 4: Arrange and display plot in Markdown output
+grid_plot <- grid.arrange(grobs = plot_matrix, ncol = n_sites, nrow = n_sites)
+print(grid_plot)
+
+# Step 5: Also save to a high-quality PDF
+ggsave("EPA_Filter_PM25_5x5_Comparison.pdf", plot = grid_plot, width = 22, height = 22)
+```
+
+
+```{r}
+
+# Load required libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gridExtra)
+
+# STEP 1: Prepare wide-format data (each site in a separate column)
+epa_wide <- epa_24hr_clean %>%
+  select(date, site_number, pm25) %>%
+  pivot_wider(names_from = site_number, values_from = pm25, values_fn = mean)
+
+# STEP 2: Set up variables
+site_names <- setdiff(names(epa_wide), "date")  # all site columns
+n_sites <- length(site_names)
+axis_min <- 0
+axis_max <- 28  # set based on observed max in summary
+
+# STEP 3: Create plot matrix
+plot_matrix <- vector("list", n_sites * n_sites)
+
+for (i in seq_len(n_sites)) {
+  for (j in seq_len(n_sites)) {
+    y_site <- site_names[i]
+    x_site <- site_names[j]
+    index <- (i - 1) * n_sites + j
+
+    df_pair <- epa_wide %>%
+      select(x = all_of(x_site), y = all_of(y_site)) %>%
+      filter(!is.na(x) & !is.na(y))
+
+    if (i == j) {
+      # Diagonal: 1:1 scatterplot of site against itself
+      p <- ggplot(df_pair, aes(x = x, y = x)) +
+        geom_point(color = "gray40", size = 1.8, alpha = 0.6) +
+        geom_abline(slope = 1, intercept = 0, linetype = "solid", color = "black") +
+        coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
+        labs(
+          x = paste("Site", x_site),
+          y = paste("Site", x_site),
+          subtitle = "1:1 Line"
+        ) +
+        theme_minimal(base_size = 12) +
+        theme(
+          plot.subtitle = element_text(size = 10, hjust = 0.5),
+          axis.title = element_text(size = 10),
+          axis.text = element_text(size = 9),
+          plot.margin = margin(6, 6, 6, 6)
+        )
+    } else {
+      # Off-diagonal: scatter + regression + R²
+      r2_text <- if (nrow(df_pair) > 2) {
+        r2 <- summary(lm(y ~ x, data = df_pair))$r.squared
+        paste0("R² = ", round(r2, 2))
+      } else {
+        "R² = NA"
+      }
+
+      p <- ggplot(df_pair, aes(x = x, y = y)) +
+        geom_point(color = "steelblue", size = 1.8, alpha = 0.7) +
+        geom_smooth(method = "lm", se = FALSE, color = "red", linewidth = 1) +
+        geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+        coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
+        labs(
+          x = paste("Site", x_site),
+          y = paste("Site", y_site),
+          subtitle = r2_text
+        ) +
+        theme_minimal(base_size = 12) +
+        theme(
+          plot.subtitle = element_text(size = 10, hjust = 0.5),
+          axis.title = element_text(size = 10),
+          axis.text = element_text(size = 9),
+          plot.margin = margin(6, 6, 6, 6)
+        )
+    }
+
+    plot_matrix[[index]] <- p
+  }
+}
+
+# STEP 4: Arrange and display in 5x5 matrix
+grid_plot <- grid.arrange(grobs = plot_matrix, ncol = n_sites, nrow = n_sites)
+print(grid_plot)
+
+# STEP 5: Save to high-resolution PDF
+ggsave("EPA_PM25_5x5_FullMatrix.pdf", plot = grid_plot, width = 22, height = 22)
+```
+
+```{r cleanincle-5x5-optical, fig.width=22, fig.height=22, echo=FALSE, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(gridExtra)
+
+# Step 1: Identify top 5 devices with the most non-NA PM2.5 readings
+top_devices <- cleanincle_data %>%
+  group_by(device_number) %>%
+  summarise(count = sum(!is.na(value)), .groups = "drop") %>%
+  arrange(desc(count)) %>%
+  slice_head(n = 5) %>%
+  pull(device_number)
+
+# Step 2: Reshape to wide format for selected devices
+cleanincle_wide <- cleanincle_data %>%
+  filter(device_number %in% top_devices) %>%
+  group_by(device_number, date) %>%
+  summarise(pm25 = mean(value, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(names_from = device_number, values_from = pm25)
+
+# Step 3: Prepare for matrix plotting
+site_names <- names(cleanincle_wide)[-1]  # exclude 'date'
+n_sites <- length(site_names)
+
+# Handle case where devices are missing or all-NA
+if (n_sites == 0) {
+  stop(" No valid devices found for plotting.")
+}
+
+axis_min <- 0
+axis_max <- 28
+plot_matrix <- vector("list", n_sites * n_sites)
+
+# Step 4: Loop through device pairs to generate plots
+for (i in seq_len(n_sites)) {
+  for (j in seq_len(n_sites)) {
+    x_site <- site_names[j]
+    y_site <- site_names[i]
+    index <- (i - 1) * n_sites + j
+
+    df_pair <- cleanincle_wide %>%
+      select(x = all_of(x_site), y = all_of(y_site)) %>%
+      filter(!is.na(x) & !is.na(y))
+
+    r2_text <- if (nrow(df_pair) > 2) {
+      r2 <- summary(lm(y ~ x, data = df_pair))$r.squared
+      paste0("R² = ", round(r2, 2))
+    } else {
+      "R² = NA"
+    }
+
+    p <- ggplot(df_pair, aes(x = x, y = y)) +
+      geom_point(color = "darkorange", alpha = 0.7, size = 1.8) +
+      geom_smooth(method = "lm", se = FALSE, color = "red", linewidth = 1) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+      coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
+      labs(
+        x = paste("Device", x_site),
+        y = paste("Device", y_site),
+        subtitle = r2_text
+      ) +
+      theme_minimal(base_size = 12) +
+      theme(
+        plot.subtitle = element_text(size = 10, hjust = 0.5),
+        axis.title = element_text(size = 10),
+        axis.text = element_text(size = 9),
+        plot.margin = margin(5, 5, 5, 5)
+      )
+
+    plot_matrix[[index]] <- p
+  }
+}
+
+# Step 5: Display inline and save to PDF
+grid_plot <- grid.arrange(grobs = plot_matrix, ncol = n_sites, nrow = n_sites)
+print(grid_plot)
+
+ggsave("CLEANinCLE_Optical_PM25_Top5_5x5_Comparison.pdf", plot = grid_plot, width = 22, height = 22)
+```
+
+
+```{r}
+# Load required libraries
+library(dplyr)
+library(readr)
+
+# If needed: combined EPA data from earlier (already loaded in your session)
+# epa_all_data <- bind_rows(epa_data_list, .id = "site_number")
+
+# Step 1: Create a full site info table from the combined EPA data
+epa_sites <- epa_all_data %>%
+  select(state_code, county_code, site_number, longitude, latitude) %>%
+  distinct()
+
+# Step 2: Filter to just the 5 sites of interest
+target_sites <- c("0034", "0038", "0045", "0060", "0065")
+
+epa_five_sites <- epa_sites %>%
+  filter(site_number %in% target_sites)
+
+# Step 3 (Optional): View or save
+print(epa_five_sites)
+
+# Optional: Save to CSV
+#write_csv(epa_five_sites, "epa_5_site_locations.csv")
+```
+
+
+```{r}
+library(dplyr)
+library(readr)
+
+# Load the data (if not already loaded)
+cleanincle_data <- read_csv("CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
+
+# Create a site info table
+cleanincle_sites <- cleanincle_data %>%
+  select(location_name, device_number, device_eui, longitude, latitude) %>%
+  distinct()
+
+# View the table
+print(cleanincle_sites)
+
+# Optional: Save to CSV
+#write_csv(cleanincle_sites, "cleancle_site_locations.csv")
+```
+
+```{r}
+# Load required libraries
+library(dplyr)
+library(readr)
+library(geosphere)
+
+# -------- STEP 1: Combine EPA Site Data (if not already) --------
+
+# Assuming epa_data_list has all 5 sites loaded using RAQSAPI
+epa_all_data <- bind_rows(epa_data_list, .id = "site_number")
+
+# Save to CSV (optional)
+write_csv(epa_all_data, "epa_pm25_site_combined.csv")
+
+# -------- STEP 2: Load Data --------
+
+# Load EPA data
+epa_data <- read_csv("epa_pm25_site_combined.csv")
+
+# Load CLEANinCLE data (replace filename with actual if different)
+cleanincle_data <- read_csv("CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
+
+# -------- STEP 3: Extract Unique Site Coordinates --------
+
+epa_sites <- epa_data %>%
+  select(site_number, latitude, longitude) %>%
+  distinct()
+
+cleanincle_sites <- cleanincle_data %>%
+  select(location_name, device_number, device_eui, latitude, longitude) %>%
+  distinct()
+
+# -------- STEP 4: Compute All Pairwise Distances --------
+
+distance_table <- expand.grid(
+  epa_site = epa_sites$site_number,
+  cleancle_device = cleanincle_sites$device_number,
+  stringsAsFactors = FALSE
+) %>%
+  left_join(epa_sites, by = c("epa_site" = "site_number")) %>%
+  left_join(cleanincle_sites, by = c("cleancle_device" = "device_number")) %>%
+  mutate(
+    distance_km = distHaversine(
+      cbind(longitude.x, latitude.x),
+      cbind(longitude.y, latitude.y)
+    ) / 1000
+  ) %>%
+  select(
+    epa_site,
+    epa_lat = latitude.x,
+    epa_lon = longitude.x,
+    cleancle_location = location_name,
+    cleancle_device,
+    device_eui,
+    cleancle_lat = latitude.y,
+    cleancle_lon = longitude.y,
+    distance_km
+  )
+
+# -------- STEP 5: View and Save the Full Table --------
+
+print(distance_table)
+
+# Save full distance table to CSV
+write_csv(distance_table, "epa_cleanincle_all_pairwise_distances.csv")
+
+```
+
+
+
+
+```{r}
+# Load required libraries
+library(dplyr)
+library(readr)
+library(geosphere)
+
+# -------- STEP 1: Combine and Save EPA Site Data --------
+# Assuming 'epa_data_list' already contains all 5 sites
+
+epa_all_data <- bind_rows(epa_data_list, .id = "site_number")
+
+# Save EPA data for future use
+write_csv(epa_all_data, "epa_pm25_site_combined.csv")
+
+# -------- STEP 2: Load EPA and CLEANinCLE Datasets --------
+
+# Load the just-saved EPA file
+epa_data <- read_csv("epa_pm25_site_combined.csv")
+
+# Load CLEANinCLE file (replace with your exact path if needed)
+cleanincle_data <- read_csv("CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
+
+# -------- STEP 3: Extract Unique Locations --------
+
+epa_sites <- epa_data %>%
+  select(site_number, latitude, longitude) %>%
+  distinct()
+
+cleanincle_sites <- cleanincle_data %>%
+  select(location_name, device_number, device_eui, latitude, longitude) %>%
+  distinct()
+
+# Compute Pairwise Distances --------
+
+distance_table <- expand.grid(
+  epa_site = epa_sites$site_number,
+  cleancle_device = cleanincle_sites$device_number
+) %>%
+  left_join(epa_sites, by = c("epa_site" = "site_number")) %>%
+  left_join(cleanincle_sites, by = c("cleancle_device" = "device_number")) %>%
+  mutate(
+    distance_km = distHaversine(
+      cbind(longitude.x, latitude.x),
+      cbind(longitude.y, latitude.y)
+    ) / 1000
+  )
+
+#write_csv(distance_table, "epa_all_distances.csv")
+
+# Closest Device to Each EPA Site --------
+
+closest_matches <- distance_table %>%
+  group_by(epa_site) %>%
+  slice_min(distance_km, n = 1) %>%
+  ungroup() %>%
+  select(
+    epa_site,
+    epa_lat = latitude.x,
+    epa_lon = longitude.x,
+    cleancle_location = location_name,
+    device_number = cleancle_device,
+    device_eui,
+    cleancle_lat = latitude.y,
+    cleancle_lon = longitude.y,
+    distance_km
+  )
+
+# View and Save Result 
+
+print(closest_matches)
+
+write_csv(closest_matches, "epa_closest_cleanincle_devices.csv")
+
+```
+
+
+```{r}
+
+
+```
 
 
 Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
