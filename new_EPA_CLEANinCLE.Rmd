@@ -892,6 +892,14 @@ cleanincle_sites <- cleanincle_data %>%
   select(location_name, device_number, device_eui, latitude, longitude) %>%
   distinct()
 
+# -------- STEP 3.5: Write RDS and CSVs with site names and coordinates ---
+
+saveRDS(epa_sites, "Maps/epa_sites.rds")
+write_csv(epa_sites, "Maps/epa_sites.csv")
+
+saveRDS(cleanincle_sites, "Maps/cleanincle_sites.rds")
+write_csv(cleanincle_sites, "Maps/cleanincle_sites.csv")
+
 # -------- STEP 4: Compute All Pairwise Distances --------
 
 distance_table <- expand.grid(

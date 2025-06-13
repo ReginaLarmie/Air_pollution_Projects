@@ -1,0 +1,157 @@
+---
+title: "Mapping Air Monitoring Sites - Cuyahoga"
+output: html_document
+date: "2025-06-13"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+##  Creating coordinate databases for Cuyahoga and surrounding counties and Lake Erie
+
+```{r save-boundary-data, eval=FALSE}
+library(sf)
+library(tigris)
+options(tigris_use_cache = TRUE)
+
+# --- Load counties ---
+oh_counties <- counties(state = "OH", cb = TRUE, class = "sf")
+target_counties <- subset(oh_counties, NAME %in% c("Cuyahoga", "Lake", "Geauga", "Summit", "Lorain", "Medina", "Portage"))
+target_counties$fill_color <- ifelse(target_counties$NAME == "Cuyahoga", "#dfffe1", "lightgrey")
+
+# --- Load Lake Erie segments ---
+lake_erie_parts <- area_water(state = "OH", county = c("Lorain", "Cuyahoga", "Lake"), class = "sf")
+lake_erie <- subset(lake_erie_parts, grepl("Erie", FULLNAME))
+
+# --- Save to .rds files (relative to Maps/ folder) ---
+saveRDS(target_counties, "target_counties.rds")
+saveRDS(lake_erie, "lake_erie.rds")
+```
+
+## Creating a coordinate database for Cleveland boundary (excluding lakefront)
+
+```{r save-cleveland-boundary, eval=FALSE}
+library(tigris)
+library(sf)
+
+# Load simplified city boundaries
+cleveland <- subset(places(state = "OH", cb = TRUE, class = "sf"), NAME == "Cleveland")
+
+# Load counties as land mask
+target_counties <- readRDS("target_counties.rds")
+
+# Intersect to remove shoreline (limit to land area)
+cleveland_land <- st_intersection(cleveland, st_union(target_counties))
+
+# Save for reuse
+saveRDS(cleveland_land, "cleveland_land.rds")
+```
+
+
+
+##  Plotting Cuyahoga County, Lake Erie, surrounding areas, and air monitoring sites
+
+```{r map-of-cuyahoga}
+library(sf)
+library(ggplot2)
+
+# Load saved files
+target_counties <- readRDS("target_counties.rds")
+lake_erie <- readRDS("lake_erie.rds")
+epa_sites <- readRDS("epa_sites.rds")
+cleanincle_sites <- readRDS("cleanincle_sites.rds")
+cleveland_land <- readRDS("cleveland_land.rds")
+
+# Add fill color for each county
+target_counties$fill_color <- ifelse(target_counties$NAME == "Cuyahoga", "#dfffe1", "lightgrey")
+
+# Define label locations
+map_labels <- tibble::tibble(
+  label = c("Lake Erie", "Cuyahoga County"),
+  longitude = c(-81.85, -81.743),
+  latitude = c(41.62, 41.37)
+)
+
+
+# Ensure consistent legend label ordering
+legend_order <- c("EPA AQS Sites", "CLEANinCLE Sites", "Cleveland Boundary")
+
+epa_sites$type <- factor("EPA AQS Sites", levels = legend_order)
+cleanincle_sites$type <- factor("CLEANinCLE Sites", levels = legend_order)
+cleveland_land$type <- factor("Cleveland Boundary", levels = legend_order)
+
+
+# Code for plotting
+
+ggplot() +
+  geom_sf(data = target_counties, aes(fill = fill_color), color = "black", show.legend = FALSE) +
+  geom_sf(data = lake_erie, fill = "#d9edff", color = NA, show.legend = FALSE) +
+
+  # EPA AQS Sites (red dots)
+  geom_point(data = epa_sites, aes(x = longitude, y = latitude, 
+                                   color = type, shape = type), 
+             size = 2, show.legend = TRUE) +
+
+  # CLEANinCLE Sites (dark blue Xs)
+  geom_point(data = cleanincle_sites, aes(x = longitude, y = latitude, 
+                                          color = type, shape = type), 
+             size = 2, stroke = 1, show.legend = TRUE) +
+
+  # Cleveland Boundary (purple outline)
+  geom_sf(data = cleveland_land, 
+          aes(color = type, shape = type), 
+          fill = NA, size = 1, show.legend = TRUE) +
+
+  geom_text(data = map_labels, aes(x = longitude, y = latitude, label = label),
+            color = "black", size = 5, fontface = "italic") +
+  
+  # Legend appearance
+  scale_color_manual(name = "Legend", 
+                     values = c("EPA AQS Sites" = "red", 
+                                "CLEANinCLE Sites" = "darkblue",
+                                "Cleveland Boundary" = "purple")) +
+
+  scale_shape_manual(name = "Legend", 
+                     values = c("EPA AQS Sites" = 16, 
+                                "CLEANinCLE Sites" = 4,
+                                "Cleveland Boundary" = NA)) +
+
+  guides(
+    color = guide_legend(override.aes = list(
+      shape = c(16, 4, NA),
+      linetype = c(0, 0, 1),
+      size = c(2, 2, 1)
+    )),
+    shape = guide_legend(override.aes = list(
+      color = c("red", "darkblue", "purple")
+    ))
+  ) +
+
+  scale_fill_identity() +
+  coord_sf(xlim = c(-82.1, -81.3), ylim = c(41.27, 41.65)) +
+  theme_minimal() +
+  theme(panel.grid = element_blank(),
+        panel.background = element_rect(fill = "white", color = NA),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title = element_blank())
+
+
+# Saving the output graphs as images in different formats
+
+ggsave("map_cleveland.pdf", width = 8, height = 6, units = "in")
+ggsave("map_cleveland.png", width = 8, height = 6, dpi = 300, units = "in")
+ggsave("map_cleveland.tiff", width = 8, height = 6, dpi = 300, units = "in", device = "tiff")
+
+
+
+
+```
+
