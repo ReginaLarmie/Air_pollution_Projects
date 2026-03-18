@@ -1,0 +1,261 @@
+---
+title: "EPA data parsing_fall"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+# Load libraries
+library(tidyverse)
+library(lubridate)
+library(geosphere)
+library(gridExtra)
+library(patchwork)
+library(readr)
+library(dplyr)
+
+
+```
+
+## Including Plots
+
+```{r}
+# Read in Site 0034 
+df_0034 <- read_csv("epa_pm25_site_0034.csv")
+
+# Preview structure
+glimpse(df_0034)
+
+# Select only 24-hour data
+df_0034_24hr <- df_0034 %>%
+  filter(sample_duration == "24 HOUR") %>%
+  select(date_local, sample_measurement) %>%
+  rename(PM25_0034F = sample_measurement)
+
+# Preview
+head(df_0034_24hr)
+
+# Average duplicate entries by date
+df_0034_24hr_avg <- df_0034_24hr %>%
+  group_by(date_local) %>%
+  summarise(PM25_0034F = mean(PM25_0034F, na.rm = TRUE), .groups = "drop")
+
+# Select only 1-hour data
+df_0034_1hr <- df_0034 %>%
+  filter(sample_duration == "1 HOUR") %>%
+  select(date_local, time_local, sample_measurement) %>%
+  rename(PM25_0034H = sample_measurement)
+
+head(df_0034_1hr)
+
+# Daily averages from the 1-hour data
+df_0034_1hr_avg <- df_0034_1hr %>%
+  group_by(date_local) %>%
+  summarise(PM25_0034H = mean(PM25_0034H, na.rm = TRUE), .groups = "drop")
+
+
+# Step 1: Read in Site 0038
+df_0038 <- read_csv("epa_pm25_site_0038.csv")
+
+# Preview structure
+glimpse(df_0038)
+
+# Filter only 24-hour data
+df_0038_24hr <- df_0038 %>%
+  filter(sample_duration == "24 HOUR") %>%
+  select(date_local, sample_measurement) %>%
+  rename(PM25_0038F = sample_measurement)
+
+# Preview
+head(df_0038_24hr)
+
+# Average duplicate entries by date
+df_0038_24hr_avg <- df_0038 %>%
+  filter(sample_duration == "24 HOUR") %>%
+  select(date_local, sample_measurement) %>%
+  rename(PM25_0038F = sample_measurement) %>%
+  group_by(date_local) %>%
+  summarise(PM25_0038F = mean(PM25_0038F, na.rm = TRUE), .groups = "drop")
+
+# Filter only 1-hour data
+df_0038_1hr <- df_0038 %>%
+  filter(sample_duration == "1 HOUR") %>%
+  select(date_local, time_local, sample_measurement) %>%
+  rename(PM25_0038H = sample_measurement)
+
+head(df_0038_1hr)
+
+# Daily averages from the 1-hour data
+df_0038_1hr_avg <- df_0038_1hr %>%
+  group_by(date_local) %>%
+  summarise(PM25_0038H = mean(PM25_0038H, na.rm = TRUE), .groups = "drop")
+
+
+# Read in Site 0045
+df_0045 <- read_csv("epa_pm25_site_0045.csv")
+
+# Preview structure
+glimpse(df_0045)
+
+# Filter only 24-hour data
+df_0045_24hr <- df_0045 %>%
+  filter(sample_duration == "24 HOUR") %>%
+  select(date_local, sample_measurement) %>%
+  rename(PM25_0045F = sample_measurement)
+
+head(df_0045_24hr)
+
+# Average duplicate entries by date
+df_0045_24hr_avg <- df_0045 %>%
+  filter(sample_duration == "24 HOUR") %>%
+  select(date_local, sample_measurement) %>%
+  rename(PM25_0045F = sample_measurement) %>%
+  group_by(date_local) %>%
+  summarise(PM25_0045F = mean(PM25_0045F, na.rm = TRUE), .groups = "drop")
+
+# Filter only 1-hour data
+df_0045_1hr <- df_0045 %>%
+  filter(sample_duration == "1 HOUR") %>%
+  select(date_local, time_local, sample_measurement) %>%
+  rename(PM25_0045H = sample_measurement)
+
+head(df_0045_1hr)
+
+# Daily averages from the 1-hour data
+df_0045_1hr_avg <- df_0045_1hr %>%
+  group_by(date_local) %>%
+  summarise(PM25_0045H = mean(PM25_0045H, na.rm = TRUE), .groups = "drop")
+
+
+# Step 1: Read in Site 0060 separately
+df_0060 <- read_csv("epa_pm25_site_0060.csv")
+
+# Preview structure
+glimpse(df_0060)
+
+# Filter only 24-hour data
+df_0060_24hr <- df_0060 %>%
+  filter(sample_duration == "24 HOUR") %>%
+  select(date_local, sample_measurement) %>%
+  rename(PM25_0060F = sample_measurement)
+
+head(df_0060_24hr)
+
+# Average duplicate entries by date
+df_0060_24hr_avg <- df_0060 %>%
+  filter(sample_duration == "24 HOUR") %>%
+  select(date_local, sample_measurement) %>%
+  rename(PM25_0060F = sample_measurement) %>%
+  group_by(date_local) %>%
+  summarise(PM25_0060F = mean(PM25_0060F, na.rm = TRUE), .groups = "drop")
+
+# Filter only 1-hour data
+df_0060_1hr <- df_0060 %>%
+  filter(sample_duration == "1 HOUR") %>%
+  select(date_local, time_local, sample_measurement) %>%
+  rename(PM25_0060H = sample_measurement)
+
+head(df_0060_1hr)
+
+# Daily averages from the 1-hour data
+df_0060_1hr_avg <- df_0060_1hr %>%
+  group_by(date_local) %>%
+  summarise(PM25_0060H = mean(PM25_0060H, na.rm = TRUE), .groups = "drop")
+
+
+
+# Step 1: Read in Site 0065 separately
+df_0065 <- read_csv("epa_pm25_site_0065.csv")
+
+# Preview structure
+glimpse(df_0065)
+
+# Filter only 24-hour data
+df_0065_24hr <- df_0065 %>%
+  filter(sample_duration == "24 HOUR") %>%
+  select(date_local, sample_measurement) %>%
+  rename(PM25_0065F = sample_measurement)
+
+head(df_0065_24hr)
+
+# Average duplicate entries by date
+df_0065_24hr_avg <- df_0065 %>%
+  filter(sample_duration == "24 HOUR") %>%
+  select(date_local, sample_measurement) %>%
+  rename(PM25_0065F = sample_measurement) %>%
+  group_by(date_local) %>%
+  summarise(PM25_0065F = mean(PM25_0065F, na.rm = TRUE), .groups = "drop")
+
+# Filter only 1-hour data
+df_0065_1hr <- df_0065 %>%
+  filter(sample_duration == "1 HOUR") %>%
+  select(date_local, time_local, sample_measurement) %>%
+  rename(PM25_0065H = sample_measurement)
+
+head(df_0065_1hr)
+
+# Daily averages from the 1-hour data
+df_0065_1hr_avg <- df_0065_1hr %>%
+  group_by(date_local) %>%
+  summarise(PM25_0065H = mean(PM25_0065H, na.rm = TRUE), .groups = "drop")
+
+
+# Read in Site 0073
+df_0073 <- read_csv("epa_pm25_site_0073.csv")
+
+# Preview structure
+glimpse(df_0073)
+
+# Filter only 24-hour data
+df_0073_24hr <- df_0073 %>%
+  filter(sample_duration == "24 HOUR") %>%
+  select(date_local, sample_measurement) %>%
+  rename(PM25_0073F = sample_measurement)
+
+head(df_0073_24hr)
+
+# Average duplicate entries by date
+df_0073_24hr_avg <- df_0073 %>%
+  filter(sample_duration == "24 HOUR") %>%
+  select(date_local, sample_measurement) %>%
+  rename(PM25_0073F = sample_measurement) %>%
+  group_by(date_local) %>%
+  summarise(PM25_0073F = mean(PM25_0073F, na.rm = TRUE), .groups = "drop")
+
+# Filter only 1-hour data
+df_0073_1hr <- df_0073 %>%
+  filter(sample_duration == "1 HOUR") %>%
+  select(date_local, time_local, sample_measurement) %>%
+  rename(PM25_0073H = sample_measurement)
+
+head(df_0073_1hr)
+
+# Daily averages from the 1-hour data
+df_0073_1hr_avg <- df_0073_1hr %>%
+  group_by(date_local) %>%
+  summarise(PM25_0073H = mean(PM25_0073H, na.rm = TRUE), .groups = "drop")
+```
+
+```{r}
+library(purrr)
+library(purrr)  # <-- add this if not already loaded
+
+df_filter_all <- reduce(
+  list(df_0034_24hr, df_0038_24hr, df_0045_24hr, df_0060_24hr, df_0065_24hr, df_0073_24hr),
+  full_join,
+  by = "date_local"
+)
+
+head(df_filter_all)
+```
+
+
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

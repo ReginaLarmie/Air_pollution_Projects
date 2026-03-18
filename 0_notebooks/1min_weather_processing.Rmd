@@ -1,0 +1,701 @@
+---
+title: "1min_weather_processing"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+library(httr)
+library(readr)
+
+station3 <- "CLE"
+year <- 2024
+sts <- sprintf("%d-01-01T00:00Z", year)
+ets <- sprintf("%d-02-01T00:00Z", year)
+
+base_url <- "https://mesonet.agron.iastate.edu/cgi-bin/request/asos1min.py"
+
+resp <- GET(
+  url = base_url,
+  query = list(
+    station = station3,
+    vars    = "tmpf",
+    sts     = sts,
+    ets     = ets,
+    sample  = "1min",
+    what    = "download",
+    tz      = "UTC"
+  )
+)
+
+# If it fails, this prints the server's message (very helpful)
+if (http_error(resp)) {
+  cat(content(resp, "text"), "\n")
+  stop_for_status(resp)
+}
+
+out_dir <- "asos_1min_raw"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+raw_file <- file.path(out_dir, sprintf("ASOS1min_%s_%s_Jan_tmpf.csv", station3, year))
+writeBin(content(resp, "raw"), raw_file)
+
+df <- read_csv(raw_file, show_col_types = FALSE)
+names(df)
+```
+
+##
+
+```{r}
+library(httr)
+library(readr)
+library(dplyr)
+library(lubridate)
+
+station3 <- "CLE"
+year <- 2024
+sts <- sprintf("%d-01-01T00:00Z", year)
+ets <- sprintf("%d-02-01T00:00Z", year)
+
+vars <- c("tmpf", "dwpf", "sknt", "drct")
+
+base_url <- "https://mesonet.agron.iastate.edu/cgi-bin/request/asos1min.py"
+
+# Build query so vars repeats as vars=tmpf&vars=dwpf&...
+query_list <- c(
+  list(
+    station = station3,
+    sts     = sts,
+    ets     = ets,
+    sample  = "1min",
+    what    = "download",
+    tz      = "UTC"
+  ),
+  setNames(as.list(vars), rep("vars", length(vars)))
+)
+
+resp <- GET(base_url, query = query_list)
+
+if (http_error(resp)) {
+  cat(content(resp, "text"), "\n")
+  stop_for_status(resp)
+}
+
+out_dir <- "asos_1min_raw"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+raw_file <- file.path(out_dir, sprintf("ASOS1min_%s_%s_Jan_core.csv", station3, year))
+writeBin(content(resp, "raw"), raw_file)
+
+df <- read_csv(raw_file, show_col_types = FALSE)
+
+# Parse timestamp (we already saw it is called valid(UTC))
+df <- df %>%
+  mutate(datetime_utc = ymd_hm(`valid(UTC)`, tz = "UTC"))
+
+names(df)
+```
+
+# 
+
+```{r}
+library(dplyr)
+library(lubridate)
+
+df <- df %>%
+  mutate(
+    datetime_utc = parse_date_time(
+      `valid(UTC)`,
+      orders = c("Ymd HMS", "Ymd HM", "Y-m-d H:M:S", "Y-m-d H:M"),
+      tz = "UTC"
+    )
+  )
+
+# quick checks
+sum(is.na(df$datetime_utc))
+head(df %>% select(`valid(UTC)`, datetime_utc), 10)
+
+```
+
+
+
+```{r}
+unique(head(df$`valid(UTC)`, 20))
+```
+```{r}
+library(dplyr)
+library(lubridate)
+library(stringr)
+
+df <- df %>%
+  mutate(
+    valid_utc_clean = str_remove(`valid(UTC)`, " UTC$"),
+    datetime_utc = ymd_hms(valid_utc_clean, tz = "UTC")
+  )
+
+# checks
+sum(is.na(df$datetime_utc))
+head(df %>% select(`valid(UTC)`, datetime_utc), 5)
+```
+
+```{r}
+library(dplyr)
+library(lubridate)
+
+# helpers
+f_to_c <- function(f) (f - 32) * 5/9
+
+rh_from_t_td <- function(Tc, TDc) {
+  es  <- 6.112 * exp((17.67 * Tc)  / (Tc  + 243.5))
+  esd <- 6.112 * exp((17.67 * TDc) / (TDc + 243.5))
+  100 * (esd / es)
+}
+
+circ_mean_deg <- function(deg) {
+  deg <- deg[!is.na(deg)]
+  if (length(deg) == 0) return(NA_real_)
+  rad <- deg * pi/180
+  m <- atan2(mean(sin(rad)), mean(cos(rad))) * 180/pi
+  if (m < 0) m <- m + 360
+  m
+}
+
+df_30min <- df %>%
+  mutate(
+    temp_c = f_to_c(tmpf),
+    dew_c  = f_to_c(dwpf),
+    rh = rh_from_t_td(temp_c, dew_c),
+    # 30-minute bins in UTC
+    t30 = floor_date(datetime_utc, unit = "30 minutes")
+  ) %>%
+  group_by(t30) %>%
+  summarise(
+    station = first(station),
+    station_name = first(station_name),
+    temp_c_mean = mean(temp_c, na.rm = TRUE),
+    rh_mean = mean(rh, na.rm = TRUE),
+    wind_spd_kn_mean = mean(sknt, na.rm = TRUE),
+    wind_dir_deg_mean = circ_mean_deg(drct),
+    n_1min = sum(!is.na(datetime_utc)),
+    .groups = "drop"
+  ) %>%
+  arrange(t30)
+
+# save it
+out_30 <- file.path(out_dir, sprintf("ASOS1min_%s_%s_Jan_30min_core.csv", station3, year))
+readr::write_csv(df_30min, out_30)
+out_30
+```
+
+```{r}
+vars <- c("tmpf", "dwpf", "sknt", "drct", "ptype")
+
+query_list <- c(
+  list(station = station3, sts = sts, ets = ets, sample = "1min", what = "download", tz = "UTC"),
+  setNames(as.list(vars), rep("vars", length(vars)))
+)
+
+resp <- GET(base_url, query = query_list)
+
+if (http_error(resp)) {
+  cat(content(resp, "text"), "\n")
+  stop_for_status(resp)
+}
+
+raw_file_pt <- file.path(out_dir, sprintf("ASOS1min_%s_%s_Jan_plusPTYPE.csv", station3, year))
+writeBin(content(resp, "raw"), raw_file_pt)
+
+df_pt <- read_csv(raw_file_pt, show_col_types = FALSE)
+names(df_pt)
+
+```
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(stringr)
+library(readr)
+
+# parse datetime
+df_pt <- df_pt %>%
+  mutate(
+    valid_utc_clean = str_remove(`valid(UTC)`, " UTC$"),
+    datetime_utc = ymd_hms(valid_utc_clean, tz = "UTC"),
+    t30 = floor_date(datetime_utc, unit = "30 minutes")
+  )
+
+df_pt <- df_pt %>%
+  mutate(
+    valid_utc_clean = str_remove(`valid(UTC)`, " UTC$"),
+    datetime_utc = ymd_hms(valid_utc_clean, tz = "UTC")
+  ) %>%
+  filter(!is.na(datetime_utc)) %>%   # drops the 31 bad timestamp rows
+  mutate(t30 = floor_date(datetime_utc, unit = "30 minutes"))
+
+# helpers
+f_to_c <- function(f) (f - 32) * 5/9
+
+rh_from_t_td <- function(Tc, TDc) {
+  es  <- 6.112 * exp((17.67 * Tc)  / (Tc  + 243.5))
+  esd <- 6.112 * exp((17.67 * TDc) / (TDc + 243.5))
+  100 * (esd / es)
+}
+
+circ_mean_deg <- function(deg) {
+  deg <- deg[!is.na(deg)]
+  if (length(deg) == 0) return(NA_real_)
+  rad <- deg * pi/180
+  m <- atan2(mean(sin(rad)), mean(cos(rad))) * 180/pi
+  if (m < 0) m <- m + 360
+  m
+}
+
+# NOTE: ptype codes vary by product, so we'll do a cautious first pass:
+# - treat any "S" as snow, any "R" as rain if ptype is text-based
+# - we'll also save the raw unique ptype values so you can document it.
+ptype_values <- sort(unique(na.omit(df_pt$ptype)))
+print(ptype_values)
+
+df_30min_ptype <- df_pt %>%
+  mutate(
+    temp_c = f_to_c(tmpf),
+    dew_c  = f_to_c(dwpf),
+    rh = rh_from_t_td(temp_c, dew_c),
+
+    ptype_chr = as.character(ptype),
+
+    is_raining_1min = str_detect(ptype_chr, "R"),
+    is_snowing_1min = str_detect(ptype_chr, "S")
+  ) %>%
+  group_by(t30) %>%
+  summarise(
+    station = first(station),
+    station_name = first(station_name),
+
+    temp_c_mean = mean(temp_c, na.rm = TRUE),
+    rh_mean = mean(rh, na.rm = TRUE),
+    wind_spd_kn_mean = mean(sknt, na.rm = TRUE),
+    wind_dir_deg_mean = circ_mean_deg(drct),
+
+    # rain/snow flags for the whole 30-min window:
+    is_raining = any(is_raining_1min, na.rm = TRUE),
+    is_snowing = any(is_snowing_1min, na.rm = TRUE),
+
+    n_1min = sum(!is.na(datetime_utc)),
+    .groups = "drop"
+  ) %>%
+  arrange(t30)
+
+# save
+out_30 <- file.path(out_dir, sprintf("ASOS1min_%s_%s_Jan_30min_core_plusRainSnow.csv", station3, year))
+write_csv(df_30min_ptype, out_30)
+out_30
+```
+```{r}
+test_vars <- function(extra_var) {
+  vars <- c("tmpf", "ptype", extra_var)
+
+  query_list <- c(
+    list(station = station3, sts = sts, ets = ets, sample = "1min", what = "download", tz = "UTC"),
+    setNames(as.list(vars), rep("vars", length(vars)))
+  )
+
+  resp <- httr::GET(base_url, query = query_list)
+
+  if (httr::http_error(resp)) {
+    msg <- httr::content(resp, "text")
+    cat(extra_var, " -> FAIL | ", msg, "\n")
+    return(FALSE)
+  } else {
+    cat(extra_var, " -> OK\n")
+    return(TRUE)
+  }
+}
+
+candidates <- c("precip", "pcp", "pamt", "phour", "p06i", "p24i", "ts", "snow", "snowd", "alti", "mslp")
+
+results <- sapply(candidates, test_vars)
+results
+```
+#January 
+```{r}
+library(httr)
+library(readr)
+
+vars <- c("tmpf", "dwpf", "sknt", "drct", "ptype", "precip")
+
+query_list <- c(
+  list(station = station3, sts = sts, ets = ets, sample = "1min", what = "download", tz = "UTC"),
+  setNames(as.list(vars), rep("vars", length(vars)))
+)
+
+resp <- GET(base_url, query = query_list)
+
+if (http_error(resp)) {
+  cat(content(resp, "text"), "\n")
+  stop_for_status(resp)
+}
+
+raw_file_full <- file.path(out_dir, sprintf("ASOS1min_%s_%s_Jan_full.csv", station3, year))
+writeBin(content(resp, "raw"), raw_file_full)
+
+df_full <- read_csv(raw_file_full, show_col_types = FALSE)
+names(df_full)
+```
+```{r}
+library(dplyr)
+library(lubridate)
+library(stringr)
+library(readr)
+
+# Helpers
+f_to_c <- function(f) (f - 32) * 5/9
+
+rh_from_t_td <- function(Tc, TDc) {
+  es  <- 6.112 * exp((17.67 * Tc)  / (Tc  + 243.5))
+  esd <- 6.112 * exp((17.67 * TDc) / (TDc + 243.5))
+  100 * (esd / es)
+}
+
+circ_mean_deg <- function(deg) {
+  deg <- deg[!is.na(deg)]
+  if (length(deg) == 0) return(NA_real_)
+  rad <- deg * pi/180
+  m <- atan2(mean(sin(rad)), mean(cos(rad))) * 180/pi
+  if (m < 0) m <- m + 360
+  m
+}
+
+df_full_30min <- df_full %>%
+  mutate(
+    valid_utc_clean = str_remove(`valid(UTC)`, " UTC$"),
+    datetime_utc = ymd_hms(valid_utc_clean, tz = "UTC")
+  ) %>%
+  filter(!is.na(datetime_utc)) %>%
+  mutate(
+    t30 = floor_date(datetime_utc, unit = "30 minutes"),
+
+    temp_c = f_to_c(tmpf),
+    dew_c  = f_to_c(dwpf),
+    rh = rh_from_t_td(temp_c, dew_c),
+
+    ptype_chr = as.character(ptype),
+    is_raining_1min = str_detect(ptype_chr, "R"),
+    is_snowing_1min = str_detect(ptype_chr, "S"),
+
+    # precip variable is typically numeric; keep NA as missing
+    precip_num = suppressWarnings(as.numeric(precip))
+  ) %>%
+  group_by(t30) %>%
+  summarise(
+    station = first(station),
+    station_name = first(station_name),
+
+    temp_c_mean = mean(temp_c, na.rm = TRUE),
+    rh_mean = mean(rh, na.rm = TRUE),
+    wind_spd_kn_mean = mean(sknt, na.rm = TRUE),
+    wind_dir_deg_mean = circ_mean_deg(drct),
+
+    # Rain/snow flags: any minute inside the 30-min window
+    is_raining = any(is_raining_1min, na.rm = TRUE),
+    is_snowing = any(is_snowing_1min, na.rm = TRUE),
+
+    # 30-min precip amount: sum across minutes in the window
+    precip_30min = sum(precip_num, na.rm = TRUE),
+
+    n_1min = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(t30)
+
+out_final <- file.path(out_dir, sprintf("ASOS1min_%s_%s_Jan_30min_FINAL.csv", station3, year))
+write_csv(df_full_30min, out_final)
+
+out_final
+
+
+summary(df_full$precip)
+```
+
+```{r}
+library(httr)
+library(readr)
+
+station3 <- "CLE"     # KCLE
+year <- 2024
+
+base_url <- "https://mesonet.agron.iastate.edu/cgi-bin/request/asos1min.py"
+
+out_dir <- "ASOS_1min_2024_raw"
+dir.create(out_dir, showWarnings = FALSE)
+
+vars <- c("tmpf","dwpf","sknt","drct","ptype","precip")
+
+for (m in 1:12) {
+
+  cat("\nDownloading month:", m, "\n")
+
+  start_date <- sprintf("%d-%02d-01T00:00Z", year, m)
+
+  if (m == 12) {
+    end_date <- sprintf("%d-01-01T00:00Z", year + 1)
+  } else {
+    end_date <- sprintf("%d-%02d-01T00:00Z", year, m + 1)
+  }
+
+  query_list <- c(
+    list(
+      station = station3,
+      sts = start_date,
+      ets = end_date,
+      sample = "1min",
+      what = "download",
+      tz = "UTC"
+    ),
+    setNames(as.list(vars), rep("vars", length(vars)))
+  )
+
+  resp <- GET(base_url, query = query_list)
+
+  if (http_error(resp)) {
+    cat("Failed month:", m, "\n")
+    next
+  }
+
+  file_name <- sprintf("%s/KCLE_%d_%02d_raw.csv", out_dir, year, m)
+  writeBin(content(resp, "raw"), file_name)
+
+  cat("Saved:", file_name, "\n")
+}
+```
+
+
+```{r}
+files <- list.files("ASOS_1min_2024_raw", full.names = TRUE)
+
+sizes_mb <- round(file.info(files)$size / 1024^2, 2)
+
+data.frame(
+  file = basename(files),
+  size_MB = sizes_mb
+)
+
+cat("Total size (MB):", round(sum(sizes_mb), 2), "\n")
+
+
+```
+
+# Burke Lakefront 2024 data
+```{r}
+library(httr)
+library(readr)
+
+
+station <- "BKL"   # Burke Lakefront (KBKL)
+year <- 2024
+
+vars <- c("tmpf","dwpf","sknt","drct","ptype","precip")
+base_url <- "https://mesonet.agron.iastate.edu/cgi-bin/request/asos1min.py"
+
+out_dir <- "ASOS_1min_2024_raw_BKL"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+
+# Helper: make month start/end timestamps in UTC
+
+month_window <- function(year, month) {
+  start <- as.POSIXct(sprintf("%d-%02d-01 00:00:00", year, month), tz = "UTC")
+  end   <- start %m+% months(1)
+  list(
+    sts = format(start, "%Y-%m-%dT%H:%MZ"),
+    ets = format(end,   "%Y-%m-%dT%H:%MZ")
+  )
+}
+
+# lubridate needed for %m+% months(1)
+library(lubridate)
+
+# Loop over months
+
+for (m in 1:12) {
+
+  w <- month_window(year, m)
+
+  query_list <- c(
+    list(
+      station = station,
+      sts = w$sts,
+      ets = w$ets,
+      sample = "1min",
+      what = "download",
+      tz = "UTC"
+    ),
+    setNames(as.list(vars), rep("vars", length(vars)))
+  )
+
+  resp <- GET(base_url, query = query_list)
+
+  if (http_error(resp)) {
+    cat("\nFAILED:", station, year, sprintf("%02d", m), "\n")
+    cat(content(resp, "text"), "\n")
+    next
+  }
+
+  out_file <- file.path(out_dir, sprintf("KBKL_%d_%02d_raw.csv", year, m))
+  writeBin(content(resp, "raw"), out_file)
+
+  cat("Saved:", out_file, "\n")
+}
+
+# quick check
+
+files_bkl <- list.files("ASOS_1min_2024_raw_BKL", full.names = TRUE)
+df_test <- read_csv(files_bkl[1], n_max = 1, show_col_types = FALSE)
+names(df_test)
+
+```
+
+# Convert Burke 2024 raw (1-min) → 30-min (monthly + full-year)
+
+```{r}
+library(readr)
+library(dplyr)
+library(lubridate)
+library(stringr)
+
+# folders
+raw_dir <- "ASOS_1min_2024_raw_BKL"
+out_dir <- "ASOS_30min_2024_BKL"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+files <- list.files(raw_dir, pattern = "\\.csv$", full.names = TRUE)
+files <- sort(files)
+
+# helpers
+f_to_c <- function(f) (f - 32) * 5/9
+
+rh_from_t_td <- function(Tc, TDc) {
+  es  <- 6.112 * exp((17.67 * Tc)  / (Tc  + 243.5))
+  esd <- 6.112 * exp((17.67 * TDc) / (TDc + 243.5))
+  100 * (esd / es)
+}
+
+circ_mean_deg <- function(deg) {
+  deg <- deg[!is.na(deg)]
+  if (length(deg) == 0) return(NA_real_)
+  rad <- deg * pi/180
+  m <- atan2(mean(sin(rad)), mean(cos(rad))) * 180/pi
+  if (m < 0) m <- m + 360
+  m
+}
+
+all_data <- list()
+
+for (f in files) {
+
+  cat("Processing:", basename(f), "\n")
+
+  df <- read_csv(f, show_col_types = FALSE)
+
+  df <- df %>%
+    mutate(
+      valid_clean = str_remove(`valid(UTC)`, " UTC$"),
+      datetime = ymd_hms(valid_clean, tz = "UTC")
+    ) %>%
+    filter(!is.na(datetime)) %>%
+    mutate(
+      # force numeric safely
+      tmpf_num   = parse_number(as.character(tmpf)),
+      dwpf_num   = parse_number(as.character(dwpf)),
+      sknt_num   = parse_number(as.character(sknt)),
+      drct_num   = parse_number(as.character(drct)),
+      precip_num = parse_number(as.character(precip)),
+
+      t30 = floor_date(datetime, "30 minutes"),
+
+      temp_c = f_to_c(tmpf_num),
+      dew_c  = f_to_c(dwpf_num),
+      rh = rh_from_t_td(temp_c, dew_c),
+
+      ptype_chr = as.character(ptype),
+      rain_flag = str_detect(ptype_chr, "R"),
+      snow_flag = str_detect(ptype_chr, "S")
+    )
+
+  df30 <- df %>%
+    group_by(t30) %>%
+    summarise(
+      station = first(station),
+      station_name = first(station_name),
+
+      temp_c = mean(temp_c, na.rm = TRUE),
+      rh = mean(rh, na.rm = TRUE),
+
+      wind_speed_kn = mean(sknt_num, na.rm = TRUE),
+      wind_dir_deg  = circ_mean_deg(drct_num),
+
+      precip_30min = sum(precip_num, na.rm = TRUE),
+
+      rain = any(rain_flag, na.rm = TRUE),
+      snow = any(snow_flag, na.rm = TRUE),
+
+      n_obs = n(),
+      .groups = "drop"
+    ) %>%
+    arrange(t30)
+
+  # save monthly 30-min file
+  out_month <- str_replace(basename(f), "_raw\\.csv$", "_30min.csv")
+  write_csv(df30, file.path(out_dir, out_month))
+
+  all_data[[basename(f)]] <- df30
+}
+
+# full-year combined
+met_2024_bkl <- bind_rows(all_data) %>% arrange(t30)
+write_csv(met_2024_bkl, file.path(out_dir, "KBKL_2024_30min_ALL.csv"))
+
+# quick checks
+cat("\nRows:", nrow(met_2024_bkl), "\n")
+print(range(met_2024_bkl$t30))
+```
+
+# Burke wind rose 
+```{r}
+library(openair)
+library(dplyr)
+
+met_wr_bkl <- met_2024_bkl %>%
+  transmute(
+    date = as.POSIXct(t30, tz = "UTC"),
+    ws = wind_speed_kn * 0.514444,  # m/s
+    wd = wind_dir_deg
+  ) %>%
+  filter(!is.na(ws), !is.na(wd))
+
+windRose(
+  met_wr_bkl,
+  ws = "ws",
+  wd = "wd",
+  angle = 30,
+  breaks = c(0, 1, 3, 5, 8, 12, 20),
+  key.position = "right",
+  paddle = FALSE,
+  main = "Burke Lakefront (KBKL) Annual Wind Rose – 2024"
+)
+
+```
+
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

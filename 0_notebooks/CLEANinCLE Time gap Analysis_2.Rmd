@@ -1,0 +1,1149 @@
+---
+title: "Urban Air Quality Research"
+output: pdf_document
+date: "`r Sys.Date()`"
+toc: "true"
+toc_depth: 3
+toc_float: "true"
+number_sections: "true"
+fig_caption: "true"
+theme: "readable"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+# 1. Data Loading and Preparation
+
+## 1.1 EPA Site Data
+## 1.2 CLEANinCLE Sensor Data
+
+# 2. EPA Site-to-Site PM2.5 Matrix
+
+# 3. CinC-to-CinC Pairwise Matrix
+
+# 4. EPA vs CinC Comparisons
+
+## 4.1 Daily Averages by Site
+## 4.2 Filter Days Only
+
+# 5. Sensor Agreement vs Distance
+
+# 6. Maps and Site Locations
+```
+
+## Objectives
+	•	Prepare and reshape the EPA dataset into a clean, wide format
+	•	Generate site-by-site PM2.5 comparison plots with regression lines and R² values
+	•	Build a matrix plot of all pairwise site comparisons
+	•	Analyze relationships between R² and geographic distance between sites
+
+
+## Libraries
+
+```{r libs}
+
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(geosphere)
+library(GGally)
+library(gridExtra)
+library(broom)
+library(sf)
+library(ggrepel)
+
+```
+
+
+# EPA data - load & organize
+```{r epa-load}
+epa_sites <- c("0034","0038","0045","0060","0065","0073")
+
+read_epa_site <- function(site){
+  f <- sprintf("epa_pm25_site_%s.csv", site)
+  stopifnot(file.exists(f))
+  read_csv(f, show_col_types = FALSE) %>%
+    mutate(site_number = site)
+}
+
+epa_all <- map_dfr(epa_sites, read_epa_site)
+
+# Quick sanity peek
+epa_all %>% count(site_number, sample_duration)
+```
+
+## 6x6 MATRIX PLOT FOR CONTINOUS DATA
+```{r epa-6x6-hourly-grid, fig.width=20, fig.height=20, echo=FALSE, message=FALSE, warning=FALSE}
+# Load necessary libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gridExtra)
+
+# Step 1: Create a list of site data frames
+site_dfs <- list(
+  "0034" = df_0034,
+  "0038" = df_0038,
+  "0045" = df_0045,
+  "0060" = df_0060,
+  "0065" = df_0065,
+  "0073" = df_0073
+)
+
+# Step 2: Generate daily averages from hourly data
+epa_hourly_daily_avg <- bind_rows(
+  lapply(names(site_dfs), function(site) {
+    df <- site_dfs[[site]]
+    df %>%
+      filter(sample_duration == "1 HOUR") %>%
+      group_by(date_local) %>%
+      summarise(pm25 = mean(sample_measurement, na.rm = TRUE), .groups = "drop") %>%
+      mutate(site_number = site, date = as.Date(date_local)) %>%
+      select(date, site_number, pm25)
+  })
+)
+
+# Step 3: Pivot to wide format
+epa_hourly_wide <- epa_hourly_daily_avg %>%
+  pivot_wider(names_from = site_number, values_from = pm25, values_fn = mean) %>%
+  filter(rowSums(is.na(across(-date))) < 3)
+
+# Step 4: Set up for matrix plot
+site_names <- sort(setdiff(names(epa_hourly_wide), "date"))
+n_sites <- length(site_names)
+axis_min <- 0
+axis_max <- 28
+
+plot_matrix <- vector("list", n_sites * n_sites)
+
+for (i in seq_len(n_sites)) {
+  for (j in seq_len(n_sites)) {
+    x_site <- site_names[j]
+    y_site <- site_names[i]
+    index <- (i - 1) * n_sites + j
+
+    df_pair <- epa_hourly_wide %>%
+      select(x = all_of(x_site), y = all_of(y_site)) %>%
+      filter(!is.na(x) & !is.na(y))
+
+    if (nrow(df_pair) > 2) {
+      model <- lm(y ~ x, data = df_pair)
+      r2 <- round(summary(model)$r.squared, 2)
+      slope <- round(coef(model)[2], 2)
+      intercept <- round(coef(model)[1], 2)
+      label_text <- paste0("y = ", slope, "x + ", intercept, "\nR² = ", r2)
+    } else {
+      label_text <- "Insufficient data"
+    }
+
+    x_pos <- axis_min + 1
+    y_pos <- axis_max - 1
+
+    p <- ggplot(df_pair, aes(x = x, y = y)) +
+      geom_point(color = "steelblue", alpha = 0.7, size = 1.8) +
+      geom_smooth(method = "lm", se = FALSE, color = "red", linewidth = 1) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+      coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
+      labs(x = paste("Site", x_site), y = paste("Site", y_site)) +
+      annotate("text", x = x_pos, y = y_pos, label = label_text, hjust = 0, vjust = 1, size = 3.5) +
+      theme_minimal(base_size = 12) +
+      theme(
+        axis.title = element_text(size = 10),
+        axis.text = element_text(size = 9),
+        plot.margin = margin(5, 5, 5, 5)
+      )
+
+    plot_matrix[[index]] <- p
+  }
+}
+
+# Step 5: Display matrix plot
+grid_plot <- grid.arrange(grobs = plot_matrix, ncol = n_sites, nrow = n_sites)
+
+print(grid_plot)
+```
+
+# Daily FRM (24‑hr) & FEM (hourly→daily)
+```{r epa-averages}
+epa_24hr_daily <- epa_all %>%
+  filter(sample_duration == "24 HOUR") %>%
+  group_by(site_number, date_local) %>%
+  summarise(pm25 = mean(sample_measurement, na.rm = TRUE), .groups = "drop") %>%
+  transmute(Date = as.Date(date_local), Site = site_number, PM25 = pm25)
+
+epa_hourly_daily <- epa_all %>%
+  filter(sample_duration == "1 HOUR") %>%
+  group_by(site_number, date_local) %>%
+  summarise(pm25 = mean(sample_measurement, na.rm = TRUE), .groups = "drop") %>%
+  transmute(Date = as.Date(date_local), Site = site_number, PM25 = pm25)
+
+# Site coordinates (averaged across file rows)
+epa_coords <- epa_all %>%
+  select(site_number, latitude, longitude) %>%
+  distinct() %>%
+  group_by(site_number) %>%
+  summarise(
+    Latitude = mean(latitude, na.rm = TRUE),
+    Longitude = mean(longitude, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  rename(Site = site_number)
+
+# Join FRM + FEM by Site & Date
+epa_frm <- epa_24hr_daily   %>% rename(PM25_FRM = PM25)   # Date, Site, PM25_FRM
+epa_fem <- epa_hourly_daily %>% rename(PM25_FEM = PM25)   # Date, Site, PM25_FEM
+
+epa_join <- inner_join(epa_fem, epa_frm, by = c("Date","Site")) %>%
+  filter(is.finite(PM25_FEM), is.finite(PM25_FRM))
+
+# Robust shared limits for figures
+lim_hi <- quantile(c(epa_join$PM25_FEM, epa_join$PM25_FRM), probs = 0.995, na.rm = TRUE)
+lim_hi <- max(5, ceiling(lim_hi/5)*5)
+lims   <- c(0, lim_hi)
+lims
+```
+
+# 6x6 MATRIX PLOT OF FILTER DATA COMPARISONS.
+```{r epa-6x6-filter-grid, fig.width=22, fig.height=22, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Load necessary libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gridExtra)
+
+# List of site numbers and their corresponding dataframes
+site_dfs <- list(
+  "0034" = df_0034,
+  "0038" = df_0038,
+  "0045" = df_0045,
+  "0060" = df_0060,
+  "0065" = df_0065,
+  "0073" = df_0073
+)
+
+# Create a combined daily average dataframe
+epa_24hr_clean <- bind_rows(
+  lapply(names(site_dfs), function(site) {
+    df <- site_dfs[[site]]
+    df %>%
+      filter(sample_duration == "24 HOUR") %>%
+      group_by(date_local) %>%
+      summarise(pm25 = mean(sample_measurement, na.rm = TRUE), .groups = "drop") %>%
+      mutate(site_number = site, date = as.Date(date_local)) %>%
+      select(date, site_number, pm25)
+  })
+)
+
+# Prepare and reshape the data into wide format
+epa_wide <- epa_24hr_clean %>%
+  select(date, site_number, pm25) %>%
+  mutate(site_number = as.character(site_number)) %>%
+  pivot_wider(names_from = site_number, values_from = pm25, values_fn = mean) %>%
+  filter(rowSums(is.na(across(-date))) < 3)
+
+# Set up plotting variables
+site_names <- sort(setdiff(names(epa_wide), "date"))
+n_sites <- length(site_names)
+axis_min <- 0
+axis_max <- 28
+
+# Create matrix of plots
+plot_matrix <- vector("list", n_sites * n_sites)
+
+for (i in seq_len(n_sites)) {
+  for (j in seq_len(n_sites)) {
+    x_site <- site_names[j]
+    y_site <- site_names[i]
+    index <- (i - 1) * n_sites + j
+
+    df_pair <- epa_wide %>%
+      select(x = all_of(x_site), y = all_of(y_site)) %>%
+      filter(!is.na(x) & !is.na(y))
+
+    if (nrow(df_pair) > 2) {
+      model <- lm(y ~ x, data = df_pair)
+      r2 <- round(summary(model)$r.squared, 2)
+      slope <- round(coef(model)[2], 2)
+      intercept <- round(coef(model)[1], 2)
+      label_text <- paste0("y = ", slope, "x + ", intercept, "\nR² = ", r2)
+    } else {
+      label_text <- "Insufficient data"
+    }
+
+    # Place label in top-left corner of the plot
+    x_pos <- axis_min + 1
+    y_pos <- axis_max - 1
+
+    p <- ggplot(df_pair, aes(x = x, y = y)) +
+      geom_point(color = "steelblue", alpha = 0.7, size = 1.8) +
+      geom_smooth(method = "lm", se = FALSE, color = "red", linewidth = 1) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+      coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
+      labs(x = paste("Site", x_site), y = paste("Site", y_site)) +
+      annotate("text", x = x_pos, y = y_pos, label = label_text, hjust = 0, vjust = 1, size = 3.5) +
+      theme_minimal(base_size = 12) +
+      theme(
+        axis.title = element_text(size = 10),
+        axis.text = element_text(size = 9),
+        plot.margin = margin(5, 5, 5, 5)
+      )
+
+    plot_matrix[[index]] <- p
+  }
+}
+
+# Display the 6x6 plot matrix
+grid_plot <- grid.arrange(grobs = plot_matrix, ncol = n_sites, nrow = n_sites)
+
+print(grid_plot)
+```
+
+
+
+# EPA Continuous (FEM daily avg) vs EPA FRM (24‑hr) 
+```{r epa-6panel, fig.width=13, fig.height=10}
+library(gridExtra)
+
+panel_one_site <- function(site_id, lims, breaks_n = 6) {
+  df <- epa_join %>% filter(Site == site_id)
+
+  lab <- if (nrow(df) > 2) {
+    fit <- lm(PM25_FEM ~ PM25_FRM, data = df)
+    sprintf("y = %.2fx %+ .2f\nR² = %.2f",
+            coef(fit)[2], coef(fit)[1], summary(fit)$r.squared)
+  } else {
+    "n < 3"
+  }
+
+  ggplot(df, aes(PM25_FRM, PM25_FEM)) +
+    geom_point(alpha = 0.80, size = 2) +
+    geom_smooth(method = "lm", se = FALSE, linewidth = 1.0, color = "steelblue") +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray40") +
+    annotate("text",
+             x = lims[1] + diff(lims)*0.03,
+             y = lims[2] - diff(lims)*0.06,
+             label = lab, hjust = 0, vjust = 1, size = 4) +
+    coord_equal(xlim = lims, ylim = lims, expand = FALSE) +
+    labs(
+      title = site_id,
+      x = expression("EPA FRM PM"[2.5]*" (µg/m³)"),
+      y = expression("EPA Continuous PM"[2.5]*" (µg/m³)")
+    ) +
+    scale_x_continuous(breaks = scales::pretty_breaks(breaks_n)) +
+    scale_y_continuous(breaks = scales::pretty_breaks(breaks_n)) +
+    theme_minimal(base_size = 16) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      axis.title = element_text(size = 13),
+      axis.text  = element_text(size = 12),
+      panel.grid.minor = element_blank()
+    )
+}
+
+site_list   <- c("0034","0038","0045","0060","0065","0073")
+panel_plots <- lapply(site_list, panel_one_site, lims = lims, breaks_n = 6)
+
+title_grob <- grid::textGrob(
+  "EPA Continuous (FEM daily avg) vs EPA FRM (24hr) — by site",
+  gp = grid::gpar(fontsize = 18, fontface = "bold")
+)
+
+p_epa_fem_vs_frm <- gridExtra::arrangeGrob(grobs = panel_plots, ncol = 3, top = title_grob)
+
+dir.create("figs", showWarnings = FALSE)
+ggsave("figs/fig_epa_fem_vs_frm_by_site_numbered_axes.png",
+       p_epa_fem_vs_frm, width = 13, height = 10, dpi = 320)
+
+grid::grid.newpage(); grid::grid.draw(p_epa_fem_vs_frm)
+```
+
+# Data exported used for Fig A (Excel)
+```{r export-fig-table}
+site_limits <- epa_join %>%
+  group_by(Site) %>%
+  summarise(
+    panel_min = lims[1],
+    panel_max = lims[2],
+    .groups = "drop"
+  )
+
+figA_table <- epa_join %>%
+  left_join(site_limits, by = "Site") %>%
+  arrange(Site, Date)
+
+readr::write_csv(figA_table, "figs/figA_epa_fem_vs_frm_table.csv")
+
+# Preview
+figA_table %>% group_by(Site) %>% slice_head(n = 5)
+
+```
+
+# Scatterplot of EPA FRM vs EPA Continuous PM2.5 with regression
+```{r}
+readr::write_csv(figA_table, "figs/figA_epa_fem_vs_frm_table.csv")
+
+figA_table <- epa_join %>%
+  left_join(site_limits, by = "Site") %>%
+  arrange(Site, Date)
+
+lab <- if (nrow(df) > 2) {
+    fit <- lm(PM25_FEM ~ PM25_FRM, data = df)
+    sprintf("y = %.2fx %+ .2f\nR² = %.2f",
+            coef(fit)[2], coef(fit)[1], summary(fit)$r.squared)
+  } else {
+    "n < 3"
+  }
+
+ggplot(df, aes(PM25_FRM, PM25_FEM)) +
+    geom_point(alpha = 0.80, size = 2) +
+    geom_smooth(method = "lm", se = FALSE, linewidth = 1.0, color = "steelblue") +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray40") +
+    annotate("text",
+             x = lims[1] + diff(lims)*0.03,
+             y = lims[2] - diff(lims)*0.06,
+             label = lab, hjust = 0, vjust = 1, size = 4) +
+    coord_equal(xlim = lims, ylim = lims, expand = FALSE) +
+    labs(
+      title = site_id,
+      x = expression("EPA FRM PM"[2.5]*" (µg/m³)"),
+      y = expression("EPA Continuous PM"[2.5]*" (µg/m³)")
+    ) +
+    scale_x_continuous(breaks = scales::pretty_breaks(breaks_n)) +
+    scale_y_continuous(breaks = scales::pretty_breaks(breaks_n)) +
+    theme_minimal(base_size = 16) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      axis.title = element_text(size = 13),
+      axis.text  = element_text(size = 12),
+      panel.grid.minor = element_blank()
+    )
+```
+
+# EPA FEM vs FRM 6-panel comparison plot
+```{r epa-6panel, fig.width=13, fig.height=10}
+
+stopifnot(all(c("Site","Date","PM25_FRM","PM25_FEM","panel_min","panel_max") %in% names(figA_table)))
+
+# 1) pull the common limits from the table
+lims <- c(unique(figA_table$panel_min)[1], unique(figA_table$panel_max)[1])
+
+# 2) per‑site regression stats (for panel labels)
+site_labs_figA <- figA_table %>%
+  dplyr::group_by(Site) %>%
+  dplyr::summarise(
+    n         = dplyr::n(),
+    slope     = if (n() > 2) coef(lm(PM25_FEM ~ PM25_FRM))[2] else NA_real_,
+    intercept = if (n() > 2) coef(lm(PM25_FEM ~ PM25_FRM))[1] else NA_real_,
+    r2        = if (n() > 2) summary(lm(PM25_FEM ~ PM25_FRM))$r.squared else NA_real_,
+    .groups   = "drop"
+  ) %>%
+  dplyr::mutate(
+    label = ifelse(is.finite(r2),
+                   sprintf("y = %.2fx %+ .2f\nR² = %.2f", slope, intercept, r2),
+                   "n < 3"),
+    x = lims[1] + diff(lims)*0.03,
+    y = lims[2] - diff(lims)*0.06
+  )
+
+# 3) plot from figA_table
+p_figA <- ggplot(figA_table, aes(PM25_FRM, PM25_FEM)) +
+  geom_point(alpha = 0.80, size = 2) +
+  geom_smooth(method = "lm", se = FALSE, linewidth = 1.0, color = "steelblue") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray40") +
+  coord_equal(xlim = lims, ylim = lims, expand = FALSE) +
+  facet_wrap(~ Site, ncol = 3) +
+  geom_text(
+    data = site_labs_figA,
+    aes(x = x, y = y, label = label),
+    inherit.aes = FALSE,
+    hjust = 0, vjust = 1, size = 4
+  ) +
+  labs(
+    title = "EPA Continuous (FEM daily avg) vs EPA FRM (24‑hr)-by site",
+    x = expression("EPA FRM PM"[2.5]*" (µg/m³)"),
+    y = expression("EPA Continuous PM"[2.5]*" (µg/m³)")
+  ) +
+  scale_x_continuous(breaks = scales::pretty_breaks(6)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(6)) +
+  theme_minimal(base_size = 16) +
+  theme(
+    plot.title = element_text(face = "bold", size = 18, hjust = 0.02),
+    strip.text  = element_text(face = "bold", size = 16),
+    axis.title  = element_text(size = 13),  # (your reduced label size)
+    axis.text   = element_text(size = 12),
+    panel.grid.minor = element_blank()
+  )
+
+# 4) save + print
+dir.create("figs", showWarnings = FALSE)
+ggsave("figs/figA_epa_fem_vs_frm_from_table.png", p_figA, width = 13, height = 10, dpi = 320)
+p_figA
+```
+
+# EPA site‑to‑site agreement vs distance
+```{r epa-r2-vs-distance, fig.width=7, fig.height=5}
+
+compute_r2_vs_distance <- function(wide_df, coords_df){
+  sites <- sort(setdiff(names(wide_df), "Date"))
+  out <- list()
+
+  for (i in seq_along(sites)) for (j in seq_along(sites)) {
+    s1 <- sites[i]; s2 <- sites[j]
+    dfp <- wide_df %>% select(x = all_of(s1), y = all_of(s2)) %>% drop_na()
+    r2 <- if (nrow(dfp) > 2) summary(lm(y ~ x, data = dfp))$r.squared else NA_real_
+
+    c1 <- coords_df %>% filter(Site == s1)
+    c2 <- coords_df %>% filter(Site == s2)
+    dist_km <- distHaversine(c(c1$Longitude, c1$Latitude), c(c2$Longitude, c2$Latitude)) / 1000
+
+    out[[length(out)+1]] <- tibble(Site1 = s1, Site2 = s2, Distance_km = dist_km, R2 = r2)
+  }
+
+  bind_rows(out) %>%
+    filter(Site1 != Site2) %>%
+    rowwise() %>% mutate(pair_id = paste(sort(c(Site1, Site2)), collapse = "-")) %>%
+    ungroup() %>% distinct(pair_id, .keep_all = TRUE) %>% select(-pair_id)
+}
+
+# Build wide tables for this helper
+epa_24hr_wide <- epa_24hr_daily %>% pivot_wider(names_from = Site, values_from = PM25)
+epa_hourly_wide <- epa_hourly_daily %>% pivot_wider(names_from = Site, values_from = PM25)
+
+epa_r2dist_24hr   <- compute_r2_vs_distance(epa_24hr_wide,  epa_coords)
+epa_r2dist_hourly <- compute_r2_vs_distance(epa_hourly_wide, epa_coords)
+
+p1 <- ggplot(epa_r2dist_24hr, aes(Distance_km, R2)) +
+  geom_point(alpha = 0.85) + geom_smooth(method = "lm", se = FALSE, linetype = "dashed") +
+  labs(title = "EPA 24hr PM2.5: Inter‑site Agreement vs Distance",
+       x = "Distance (km)", y = expression(R^2)) +
+  theme_minimal()
+ggsave("figs/fig_epa_r2_vs_distance_24hr.png", p1, width = 7, height = 5, dpi = 300)
+p1
+```
+
+# Map: EPA sites+CLEANinCLE devices+Cleveland boundary
+```{r map-rds, fig.width=8, fig.height=6}
+# Load saved files you already created
+target_counties   <- readRDS("target_counties.rds")
+lake_erie         <- readRDS("lake_erie.rds")
+epa_sites_map     <- readRDS("epa_sites.rds")         
+cleanincle_sites  <- readRDS("cleanincle_sites.rds")
+cleveland_land    <- readRDS("cleveland_land.rds")
+
+# Color Cuyahoga
+target_counties$fill_color <- ifelse(target_counties$NAME == "Cuyahoga", "#dfffe1", "lightgrey")
+
+# Legend setup
+legend_order <- c("EPA AQS Sites", "CLEANinCLE Sites", "Cleveland Boundary")
+epa_sites_map$type        <- factor("EPA AQS Sites", levels = legend_order)
+cleanincle_sites$type     <- factor("CLEANinCLE Sites", levels = legend_order)
+cleveland_land$type       <- factor("Cleveland Boundary", levels = legend_order)
+
+# Choose the right label column for site numbers (adjust if your column differs)
+label_col <- dplyr::coalesce(epa_sites_map$site_number,
+                             epa_sites_map$Site,
+                             epa_sites_map$aqs_site_id)
+epa_sites_map$label_txt <- as.character(label_col)
+
+# Labels for big features
+map_labels <- tibble::tibble(
+  label = c("Lake Erie", "Cuyahoga County"),
+  longitude = c(-81.85, -81.743),
+  latitude  = c(41.62,  41.37)
+)
+
+p_map <- ggplot() +
+  geom_sf(data = target_counties, aes(fill = fill_color), color = "black", linewidth = 0.3, show.legend = FALSE) +
+  geom_sf(data = lake_erie, fill = "#d9edff", color = NA, show.legend = FALSE) +
+
+  geom_point(data = epa_sites_map, aes(x = longitude, y = latitude, color = type),
+             shape = 16, size = 2.6, show.legend = TRUE) +
+  geom_point(data = cleanincle_sites, aes(x = longitude, y = latitude, color = type),
+             shape = 4, size = 2.6, stroke = 1, show.legend = TRUE) +
+
+  geom_sf(data = cleveland_land, aes(color = type),
+          linetype = 1, linewidth = 1, fill = NA, show.legend = TRUE) +
+
+  geom_text(data = map_labels, aes(x = longitude, y = latitude, label = label),
+            color = "black", size = 5, fontface = "italic") +
+
+  # Repelled labels for *EPA site numbers*
+  ggrepel::geom_text_repel(
+    data = epa_sites_map, aes(x = longitude, y = latitude, label = label_txt),
+    seed = 123, size = 3.6, fontface = "bold",
+    color = "black", box.padding = 0.25, point.padding = 0.25, min.segment.length = 0
+  ) +
+
+  scale_color_manual(name = "Legend",
+                     values = c("EPA AQS Sites" = "red",
+                                "CLEANinCLE Sites" = "darkblue",
+                                "Cleveland Boundary" = "purple")) +
+  guides(color = guide_legend(override.aes = list(
+    shape = c(16, 4, NA),
+    linetype = c(0, 0, 1),
+    size = c(2.6, 2.6, 1)
+  ))) +
+
+  scale_fill_identity() +
+  coord_sf(xlim = c(-82.1, -81.3), ylim = c(41.27, 41.65)) +
+  theme_minimal() +
+  theme(panel.grid = element_blank(),
+        panel.background = element_rect(fill = "white", color = NA),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title = element_blank(),
+        legend.position = "right")
+
+dir.create("figs", showWarnings = FALSE)
+ggsave("figs/map_cleveland_numbered.png", p_map, width = 8, height = 6, dpi = 320)
+p_map
+```
+
+# Map of EPA sites and CLEANinCLE devices in Cuyahoga County
+```{r map-epa-cinc, message=FALSE, warning=FALSE, fig.width=10, fig.height=7}
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(tigris)   
+options(tigris_use_cache = TRUE, tigris_class = "sf")
+
+# --- 1) Convert your coordinates to sf points (WGS84) ---
+epa_sf <- epa_coords %>%
+  mutate(SiteLab = Site) %>%              # e.g., "0034"
+  st_as_sf(coords = c("Longitude","Latitude"), crs = 4326)
+
+cinc_sf <- cinc_locations %>%
+  mutate(DeviceLab = as.character(device_number)) %>%
+  st_as_sf(coords = c("longitude","latitude"), crs = 4326)
+
+# --- 2) Get background shapes: Cuyahoga County + Cleveland city ---
+ohio_counties <- counties(state = "OH", year = 2023) %>% st_transform(4326)
+cuyahoga      <- ohio_counties %>% filter(NAME == "Cuyahoga")
+
+ohio_places   <- places(state = "OH", year = 2023) %>% st_transform(4326)
+cleveland     <- ohio_places %>% filter(NAME == "Cleveland")
+
+# --- 3) Build the map ---
+p_map <- ggplot() +
+  geom_sf(data = cuyahoga, fill = "honeydew", color = "gray60", linewidth = 0.4) +
+  geom_sf(data = cleveland, fill = NA, color = "purple", linewidth = 0.8) +
+  # CLEANinCLE devices (blue X)
+  geom_sf(data = cinc_sf, color = "navy", shape = 4, stroke = 1.1, size = 3) +
+  # EPA sites (red dots)
+  geom_sf(data = epa_sf, color = "red3", fill = "red3", shape = 21, size = 3) +
+  # EPA labels (site numbers)
+  geom_label_repel(
+    data = epa_sf, aes(label = SiteLab, geometry = geometry),
+    stat = "sf_coordinates", seed = 123,
+    size = 3.4, label.size = 0.2, label.padding = unit(0.15, "lines"),
+    min.segment.length = 0, box.padding = 0.25
+  ) +
+  # optional: show fewer CinC labels by sampling (uncomment to label all if wanted)
+  # geom_text_repel(
+  #   data = cinc_sf, aes(label = DeviceLab, geometry = geometry),
+  #   stat = "sf_coordinates", size = 2.6, color = "navy", seed = 123, box.padding = 0.15
+  # ) +
+  coord_sf(expand = FALSE) +
+  labs(title = "EPA AQS Sites and CLEANinCLE Devices in Cuyahoga County",
+       subtitle = "Red = EPA sites (with site numbers), Blue X = CLEANinCLE devices\nPurple outline = City of Cleveland",
+       x = NULL, y = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.major = element_line(color = "gray90", linewidth = 0.3),
+    plot.title = element_text(face = "bold", size = 14)
+  )
+
+# --- 4) Save & print ---
+dir.create("figs", showWarnings = FALSE)
+ggsave("figs/map_epa_cinc_cuyahoga.png", p_map, width = 10, height = 7, dpi = 320)
+p_map
+```
+
+# CLEANinCLE Data loading and preprocessing
+```{r}
+library(tidyverse)
+library(lubridate)
+library(geosphere)
+library(broom)
+
+
+cinc_path <- "~/Documents/R_Projects/Air_pollution_Projects/CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv"
+stopifnot(file.exists(cinc_path))
+
+cinc_raw <- readr::read_csv(cinc_path, show_col_types = FALSE)
+
+# Normalize names once
+names(cinc_raw) <- tolower(names(cinc_raw))
+
+# Keep PM2.5 rows (common names seen so far)
+pm25_rows <- cinc_raw %>%
+  filter(measure_name %in% c("pm25","pm2.5","mc_pm2_5"))
+
+# Daily averages per device
+cinc_daily <- pm25_rows %>%
+  mutate(datetime = ymd_hms(time, quiet = TRUE),
+         date     = as.Date(datetime)) %>%
+  transmute(date,
+            device_number = as.character(device_number),
+            pm25 = value,
+            latitude, longitude,
+            device_eui, location_name) %>%
+  group_by(device_number, date) %>%
+  summarise(pm25 = mean(pm25, na.rm = TRUE),
+            .groups = "drop")
+
+# One row per device (for mapping)
+cinc_locations <- pm25_rows %>%
+  transmute(device_number = as.character(device_number),
+            device_eui, location_name,
+            latitude, longitude) %>%
+  distinct()
+```
+
+# Closest EPA sites vs. CinC
+```{r build-nearest-epa, message=FALSE}
+# Requires epa_coords from your earlier EPA section
+#   epa_coords: Site, Latitude, Longitude
+stopifnot(all(c("Site","Latitude","Longitude") %in% names(epa_coords)))
+
+# Map each CinC device to its nearest EPA site
+device_to_epa <- cinc_locations %>%
+  rowwise() %>%
+  mutate(
+    nearest_epa = epa_coords$Site[ which.min(
+      distHaversine(c(longitude, latitude),
+                    cbind(epa_coords$Longitude, epa_coords$Latitude))
+    ) ],
+    dist_km = min(
+      distHaversine(c(longitude, latitude),
+                    cbind(epa_coords$Longitude, epa_coords$Latitude))
+    )/1000
+  ) %>%
+  ungroup() %>%
+  rename(epa_site = nearest_epa)
+
+# Join CinC daily with nearest EPA daily (both FRM & FEM→daily)
+epa_24hr_daily_std   <- epa_24hr_daily   %>% rename(pm25_epa_frm = PM25)   # Date, Site, pm25_epa_frm
+epa_hourly_daily_std <- epa_hourly_daily %>% rename(pm25_epa_fem = PM25)   # Date, Site, pm25_epa_fem
+
+cinc_daily_map <- cinc_daily %>%
+  left_join(device_to_epa %>% select(device_number, epa_site, dist_km), by = "device_number")
+
+# A) CinC vs EPA FRM (24‑hr)
+cinc_vs_epa_frm <- cinc_daily_map %>%
+  inner_join(epa_24hr_daily_std, by = c("epa_site" = "Site", "date" = "Date")) %>%
+  rename(pm25_cinc = pm25)
+
+# B) CinC vs EPA FEM (hourly→daily)
+cinc_vs_epa_fem <- cinc_daily_map %>%
+  inner_join(epa_hourly_daily_std, by = c("epa_site" = "Site", "date" = "Date")) %>%
+  rename(pm25_cinc = pm25)
+
+# C) CinC vs EPA FEM restricted to FRM days
+frm_dates <- epa_24hr_daily_std %>% distinct(Date)
+epa_fem_on_frm <- epa_hourly_daily_std %>% semi_join(frm_dates, by = "Date")
+
+cinc_vs_epa_fem_on_frm <- cinc_daily_map %>%
+  inner_join(epa_fem_on_frm, by = c("epa_site" = "Site", "date" = "Date")) %>%
+  rename(pm25_cinc = pm25)
+```
+
+# CinC vs EPA PM2.5 comparisons
+
+```{r}
+# Reusable plotter: clean axes, per‑panel regression eq + R², and CSV export of the exact plotting table
+plot_cinc_vs_epa <- function(df,
+                             epa_col, cinc_col, site_col,
+                             title_prefix, file_stub,
+                             ncol = 3, q = 0.995) {
+
+  stopifnot(all(c(epa_col, cinc_col, site_col) %in% names(df)))
+
+  d <- df %>%
+    transmute(epa_site = .data[[site_col]],
+              pm_epa   = .data[[epa_col]],
+              pm_cinc  = .data[[cinc_col]],
+              date     = date,
+              device_number = device_number,
+              dist_km = dist_km) %>%
+    filter(is.finite(pm_epa), is.finite(pm_cinc)) %>%
+    mutate(epa_site = as.character(epa_site))
+
+  if (!nrow(d)) return(invisible(NULL))
+
+  # Robust common limits
+  lim_hi <- quantile(c(d$pm_epa, d$pm_cinc), probs = q, na.rm = TRUE)
+  lim_hi <- max(5, ceiling(lim_hi/5)*5)
+  lims   <- c(0, lim_hi)
+
+  # Per‑site regression
+  site_stats <- d %>%
+    group_by(epa_site) %>%
+    summarise(
+      n = n(),
+      slope = if (n() > 2) coef(lm(pm_cinc ~ pm_epa))[2] else NA_real_,
+      intercept = if (n() > 2) coef(lm(pm_cinc ~ pm_epa))[1] else NA_real_,
+      r2 = if (n() > 2) summary(lm(pm_cinc ~ pm_epa))$r.squared else NA_real_,
+      .groups = "drop"
+    ) %>%
+    mutate(
+      eq_label = ifelse(is.finite(r2),
+                        sprintf("y = %.2fx %+ .2f\nR² = %.2f", slope, intercept, r2),
+                        "n < 3"),
+      x_lab = lims[1] + diff(lims)*0.03,
+      y_lab = lims[2] - diff(lims)*0.06
+    )
+
+  # Plot
+  p <- ggplot(d, aes(pm_epa, pm_cinc)) +
+    geom_point(alpha = 0.8, size = 2) +
+    geom_smooth(method = "lm", se = FALSE, linewidth = 1.0, color = "steelblue") +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray40") +
+    coord_equal(xlim = lims, ylim = lims, expand = FALSE) +
+    facet_wrap(~ epa_site, ncol = ncol) +
+    geom_text(data = site_stats, aes(x = x_lab, y = y_lab, label = eq_label),
+              inherit.aes = FALSE, hjust = 0, vjust = 1, size = 4) +
+    labs(
+      title = title_prefix,
+      x = "EPA PM2.5 (µg/m³)",
+      y = "CLEANinCLE PM2.5 (µg/m³)"
+    ) +
+    scale_x_continuous(breaks = scales::pretty_breaks(6)) +
+    scale_y_continuous(breaks = scales::pretty_breaks(6)) +
+    theme_minimal(base_size = 16) +
+    theme(
+      plot.title = element_text(face = "bold", size = 18, hjust = 0.02),
+      strip.text  = element_text(face = "bold", size = 16),
+      axis.title  = element_text(size = 16),
+      axis.text   = element_text(size = 12),
+      panel.grid.minor = element_blank()
+    )
+
+  dir.create("figs", showWarnings = FALSE)
+
+  # Save figure
+  ggplot2::ggsave(paste0("figs/", file_stub, ".png"), p, width = 13, height = 10, dpi = 320)
+
+  
+  # Add the common limits used
+  d_out <- d %>%
+    mutate(axis_min = lims[1], axis_max = lims[2])
+
+  readr::write_csv(d_out, paste0("figs/", file_stub, "_plotdata.csv"))
+
+  # Also export per‑site regression summary
+  readr::write_csv(site_stats %>%
+                     select(epa_site, n, slope, intercept, r2) %>%
+                     arrange(epa_site),
+                   paste0("figs/", file_stub, "_site_stats.csv"))
+
+  p
+}
+```
+
+# CinC vs EPA PM2.5 comparison plots
+```{r cinc-epa-plots, message=FALSE, fig.width=10, fig.height=22}
+
+# A) CinC vs EPA FRM
+p_frm <- plot_cinc_vs_epa(
+  df = cinc_vs_epa_frm,
+  epa_col = "pm25_epa_frm",
+  cinc_col = "pm25_cinc",
+  site_col = "epa_site",
+  title_prefix = "CLEANinCLE vs EPA FRM (24hr)-by EPA site",
+  file_stub = "cinc_vs_epa_frm_by_site",
+  ncol = 3
+)
+
+# B) CinC vs EPA FEM (daily avg)
+p_fem <- plot_cinc_vs_epa(
+  df = cinc_vs_epa_fem,
+  epa_col = "pm25_epa_fem",
+  cinc_col = "pm25_cinc",
+  site_col = "epa_site",
+  title_prefix = "CLEANinCLE vs EPA Continuous (daily avg)-by EPA site",
+  file_stub = "cinc_vs_epa_fem_by_site",
+  ncol = 3
+)
+
+# C) CinC vs EPA FEM on FRM days only
+p_fem_on_frm <- plot_cinc_vs_epa(
+  df = cinc_vs_epa_fem_on_frm,
+  epa_col = "pm25_epa_fem",
+  cinc_col = "pm25_cinc",
+  site_col = "epa_site",
+  title_prefix = "CLEANinCLE vs EPA Continuous (on FRM days)-by EPA site",
+  file_stub = "cinc_vs_epa_fem_on_frm_by_site",
+  ncol = 3
+)
+
+p_frm; p_fem; p_fem_on_frm
+```
+
+# Combined regression summary table (CinC vs EPA)
+```{r}
+# Combined table of regression results across the three comparisons
+tbl_frm <- readr::read_csv("figs/cinc_vs_epa_frm_by_site_site_stats.csv", show_col_types = FALSE) %>%
+  mutate(comparison = "CinC vs EPA FRM")
+tbl_fem <- readr::read_csv("figs/cinc_vs_epa_fem_by_site_site_stats.csv", show_col_types = FALSE) %>%
+  mutate(comparison = "CinC vs EPA FEM")
+tbl_fem_on_frm <- readr::read_csv("figs/cinc_vs_epa_fem_on_frm_by_site_site_stats.csv", show_col_types = FALSE) %>%
+  mutate(comparison = "CinC vs EPA FEM on FRM days")
+
+all_regressions <- bind_rows(tbl_frm, tbl_fem, tbl_fem_on_frm) %>%
+  arrange(comparison, epa_site)
+
+readr::write_csv(all_regressions, "figs/cinc_epa_all_regression_summaries.csv")
+all_regressions
+
+```
+
+# CLEANinCLE vs EPA: Inter-site Agreement vs Distance
+```{r}
+library(geosphere)
+
+# Function: compute R² and distance for each CinC–EPA pair
+get_r2_dist <- function(df, epa_col, cinc_col, site_col, device_col = "device_number") {
+  df %>%
+    filter(is.finite(.data[[epa_col]]), is.finite(.data[[cinc_col]])) %>%
+    group_by(pair = paste(.data[[site_col]], .data[[device_col]], sep = "-")) %>%
+    summarise(
+      epa_site = first(.data[[site_col]]),
+      device   = first(.data[[device_col]]),
+      r2 = if (n() > 2) summary(lm(.data[[cinc_col]] ~ .data[[epa_col]]))$r.squared else NA_real_,
+      dist_km = mean(dist_km, na.rm = TRUE),
+      n = n(),
+      .groups = "drop"
+    ) %>%
+    filter(!is.na(r2), !is.na(dist_km))
+}
+
+# R² vs distance for all 3 comparisons
+r2_frm        <- get_r2_dist(cinc_vs_epa_frm,        "pm25_epa_frm", "pm25_cinc", "epa_site")
+r2_fem        <- get_r2_dist(cinc_vs_epa_fem,        "pm25_epa_fem", "pm25_cinc", "epa_site")
+r2_fem_on_frm <- get_r2_dist(cinc_vs_epa_fem_on_frm, "pm25_epa_fem", "pm25_cinc", "epa_site")
+
+# Add comparison labels
+r2_frm$comparison        <- "CinC vs EPA FRM"
+r2_fem$comparison        <- "CinC vs EPA FEM"
+r2_fem_on_frm$comparison <- "CinC vs EPA FEM on FRM days"
+
+r2_all <- bind_rows(r2_frm, r2_fem, r2_fem_on_frm)
+```
+
+# CinC–EPA Agreement by Distance (Bar Chart)
+```{r}
+# Assign bins
+r2_all <- r2_all %>%
+  mutate(dist_bin = case_when(
+    dist_km <= 0.5       ~ "< 0.5 km (collocated)",
+    dist_km <= 3         ~ "0.5–3 km (nearby)",
+    dist_km > 3          ~ "> 3 km (farther)",
+    TRUE                 ~ NA_character_
+  ))
+
+# Summary per bin + comparison
+r2_summary <- r2_all %>%
+  group_by(comparison, dist_bin) %>%
+  summarise(
+    avg_r2 = mean(r2, na.rm = TRUE),
+    n_pairs = n(),
+    .groups = "drop"
+  )
+
+# Plot
+p_bins <- ggplot(r2_summary, aes(x = dist_bin, y = avg_r2, fill = comparison)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  labs(
+    title = "CinC–EPA Agreement by Distance",
+    x = "Distance",
+    y = expression("Average R"^2),
+    fill = NULL
+  ) +
+  ylim(0, 1) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    axis.text.x = element_text(angle = 15, hjust = 1),
+    legend.position = "bottom"
+  )
+
+ggsave("figs/fig_r2_by_distance_bin.png", p_bins, width = 8, height = 5.5, dpi = 320)
+p_bins
+```
+
+# CLEANinCLE Pairwise Comparism matrix
+```{r cinc-16x16-matrix, fig.width=22, fig.height=22, echo=FALSE, message=FALSE, warning=FALSE}
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gridExtra)
+
+
+# Keep only numeric device columns (devices) and drop very sparse ones
+cinc_mat <- cinc_wide %>%
+  select(where(is.numeric)) %>%
+  select(where(~ mean(!is.na(.)) > 0.7))
+
+dev_ids <- names(cinc_mat)
+n_dev   <- length(dev_ids)
+
+# Axis range & ticks (adjust if you want)
+axis_min <- 0
+axis_max <- 40
+tick_by  <- 10
+tick_seq <- seq(axis_min, axis_max, by = tick_by)
+
+# One panel builder (axis titles shown on **every** panel)
+make_panel <- function(df_pair, x_lab_txt, y_lab_txt) {
+  if (nrow(df_pair) > 2) {
+    m  <- lm(y ~ x, data = df_pair)
+    s  <- summary(m)
+    r2 <- round(s$r.squared, 2)
+    slope <- round(coef(m)[2], 2)
+    intercept <- round(coef(m)[1], 2)
+    eq  <- paste0("y = ", slope, "x + ", intercept, "\nR² = ", r2)
+  } else {
+    eq  <- "n < 3"
+  }
+
+  ggplot(df_pair, aes(x, y)) +
+    geom_point(color = "darkgreen", alpha = 0.55, size = 1.1) +
+    geom_smooth(method = "lm", se = FALSE, color = "steelblue", linewidth = 0.6) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray40") +
+    coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
+    scale_x_continuous(breaks = tick_seq, limits = c(axis_min, axis_max)) +
+    scale_y_continuous(breaks = tick_seq, limits = c(axis_min, axis_max)) +
+    annotate("text",
+      x = axis_min + 0.8, y = axis_max - 0.8,
+      label = eq, hjust = 0, vjust = 1, size = 2.3
+    ) +
+    labs(
+      x = paste0("Device ", x_lab_txt, " — PM2.5 (µg/m³)"),
+      y = paste0("Device ", y_lab_txt, " — PM2.5 (µg/m³)")
+    ) +
+    theme_minimal(base_size = 7.5) +
+    theme(
+      panel.grid.minor = element_blank(),
+      plot.margin = margin(2, 2, 2, 2),
+      axis.title.x = element_text(size = 6.2, margin = margin(t = 4)),
+      axis.title.y = element_text(size = 6.2, margin = margin(r = 4)),
+      axis.text.x  = element_text(size = 5.8),
+      axis.text.y  = element_text(size = 5.8)
+    )
+}
+
+# Build all panels (every panel shows its own axis titles with "Device <id>")
+plots <- vector("list", n_dev * n_dev)
+
+for (i in seq_len(n_dev)) {
+  for (j in seq_len(n_dev)) {
+    x_id <- dev_ids[j]
+    y_id <- dev_ids[i]
+    idx  <- (i - 1) * n_dev + j
+
+    df_pair <- cinc_mat %>%
+      select(x = all_of(x_id), y = all_of(y_id)) %>%
+      filter(!is.na(x) & !is.na(y))
+
+    plots[[idx]] <- make_panel(df_pair, x_lab_txt = x_id, y_lab_txt = y_id)
+  }
+}
+
+matrix_plot <- grid.arrange(grobs = plots, ncol = n_dev, nrow = n_dev)
+
+# Save large canvas so labels remain readable
+dir.create("figs", showWarnings = FALSE)
+w <- max(20, n_dev * 2.2)   # width in inches
+h <- max(22, n_dev * 2.5)   # height in inches
+ggsave("figs/fig_cinc_pairwise_device_full_labels.png", matrix_plot, width = w, height = h, dpi = 300)
+
+matrix_plot
+```
+
+# CinC-EPA R² summary tables 
+```{r}
+library(dplyr)
+library(readr)
+
+# sanity checks (these should already exist from your pipeline)
+("cinc_vs_epa_cont_on_filter_days")
+("epa_hourly_daily_std")
+(exists("epa_24hr_daily_std"))
+(exists("cinc_daily_map"))
+
+# helper to compute R² safely
+r2_safe <- function(x, y) {
+  ok <- is.finite(x) & is.finite(y)
+  if (sum(ok) > 2) summary(lm(y[ok] ~ x[ok]))$r.squared else NA_real_
+}
+
+# 1) CinC vs EPA Continuous (FEM) restricted to FRM days  -------------------
+# (You already built: cinc_vs_epa_cont_on_filter_days with pm25_cinc, pm25_epa_cont)
+
+r2_cont_on_frm <- cinc_vs_epa_cont_on_filter_days %>%
+  group_by(epa_site) %>%
+  summarise(
+    n_pairs = sum(complete.cases(pm25_cinc, pm25_epa_cont)),
+    r2      = r2_safe(pm25_epa_cont, pm25_cinc),
+    .groups = "drop"
+  ) %>%
+  mutate(comparison = "CinC vs EPA Continuous (on FRM days)")
+
+# 2) CinC vs EPA Filter (FRM) restricted to FEM days  -----------------------
+# Filter dates down to those where FEM (continuous) exists
+fem_dates <- epa_hourly_daily_std %>% distinct(Date)
+
+epa_filter_on_fem <- epa_24hr_daily_std %>%  # has Date, Site, pm25_epa
+  semi_join(fem_dates, by = "Date")
+
+# Join CinC daily with EPA FRM on FEM days
+cinc_vs_epa_filter_on_fem_days <- cinc_daily_map %>%        # has device -> epa_site mapping + CinC daily
+  inner_join(epa_filter_on_fem, by = c("epa_site" = "Site", "date" = "Date")) %>%
+  rename(pm25_cinc = pm25, pm25_epa_filter = pm25_epa)
+
+r2_filter_on_fem <- cinc_vs_epa_filter_on_fem_days %>%
+  group_by(epa_site) %>%
+  summarise(
+    n_pairs = sum(complete.cases(pm25_cinc, pm25_epa_filter)),
+    r2      = r2_safe(pm25_epa_filter, pm25_cinc),
+    .groups = "drop"
+  ) %>%
+  mutate(comparison = "CinC vs EPA Filter (on FEM days)")
+
+# 3) Combine + save (long and wide formats) ---------------------------------
+
+r2_long <- bind_rows(r2_cont_on_frm, r2_filter_on_fem) %>%
+  arrange(epa_site, comparison) %>%
+  mutate(r2 = round(r2, 3))
+
+r2_wide <- r2_long %>%
+  select(epa_site, comparison, r2) %>%
+  tidyr::pivot_wider(
+    names_from  = comparison,
+    values_from = r2
+  )
+
+# write out
+dir.create("figs", showWarnings = FALSE)
+write_csv(r2_long, "figs/cinc_epa_r2_long_FRMvsFEM_restricted.csv")
+write_csv(r2_wide, "figs/cinc_epa_r2_wide_FRMvsFEM_restricted.csv")
+
+# preview
+r2_long
+r2_wide
+```

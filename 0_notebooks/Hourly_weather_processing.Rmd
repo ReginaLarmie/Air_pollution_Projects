@@ -1,0 +1,489 @@
+---
+title: "Hourly_weather_processing"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r }
+
+```
+
+## 
+
+
+
+```{r}
+
+# ---- Packages ----
+
+library(riem)
+library(readr)
+
+# ---- Settings ----
+stations   <- c("KCLE", "KBKL", "KCGF")
+start_date <- "2023-01-01"
+end_date   <- "2023-12-25"
+
+raw_dir <- "data_raw_iem"
+if (!dir.exists(raw_dir)) dir.create(raw_dir, recursive = TRUE)
+
+# ---- Download + save each station separately ----
+for (stn in stations) {
+
+  rds_file <- file.path(
+    raw_dir,
+    sprintf("raw_%s_%s_to_%s.rds", stn, start_date, end_date)
+  )
+
+  csv_file <- file.path(
+    raw_dir,
+    sprintf("raw_%s_%s_to_%s.csv", stn, start_date, end_date)
+  )
+
+  # Skip download if already saved
+  if (file.exists(rds_file)) {
+    message("Already exists, skipping: ", stn)
+    next
+  }
+
+  message("Downloading raw hourly data for ", stn, " ...")
+
+  raw_df <- riem_measures(
+    station    = stn,
+    date_start = start_date,
+    date_end   = end_date
+  )
+
+  # Save raw outputs
+  saveRDS(raw_df, rds_file)
+  write_csv(raw_df, csv_file)
+
+  message("Saved files for ", stn)
+}
+```
+
+```{r}
+list.files("data_raw_iem")
+
+kcle_raw <- readRDS("data_raw_iem/raw_KCLE_2023-01-01_to_2023-12-25.rds")
+nrow(kcle_raw)
+names(kcle_raw)
+
+```
+
+```{r}
+# =========================
+# NOAA ISD-Lite hourly download (direct from NOAA)
+# Separate files for KCLE, KBKL, KCGF
+# Date range: 2023-01-01 to 2024-12-31
+# =========================
+
+# ---- Packages ----
+
+library(readr)
+library(dplyr)
+library(stringr)
+library(lubridate)
+library(R.utils)
+
+# ---- Settings ----
+stations <- c("KCLE", "KBKL", "KCGF")
+start_date <- as.Date("2023-01-01")
+end_date   <- as.Date("2024-12-31")
+years <- c(2023, 2024)
+
+out_dir <- "noaa_isd_lite_separate_2023_2024"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+# ---- 1) Download NOAA station history ----
+meta_url  <- "https://www.ncei.noaa.gov/pub/data/noaa/isd-history.csv"
+meta_file <- file.path(out_dir, "isd-history.csv")
+if (!file.exists(meta_file)) download.file(meta_url, meta_file, mode = "wb")
+
+# ---- 2) Read metadata + normalize columns safely ----
+isd_hist_raw <- read_csv(meta_file, show_col_types = FALSE)
+
+# Detect station name column in YOUR file (includes "STATION NAME")
+station_name_col <- dplyr::case_when(
+  "STATION NAME" %in% names(isd_hist_raw) ~ "STATION NAME",
+  "STATION_NAME" %in% names(isd_hist_raw) ~ "STATION_NAME",
+  "STATION"      %in% names(isd_hist_raw) ~ "STATION",
+  "NAME"         %in% names(isd_hist_raw) ~ "NAME",
+  TRUE ~ NA_character_
+)
+
+if (is.na(station_name_col)) {
+  stop("Could not find a station name column in isd-history.csv. Columns are:\n",
+       paste(names(isd_hist_raw), collapse = ", "))
+}
+
+isd_hist <- isd_hist_raw %>%
+  mutate(
+    ICAO = if ("ICAO" %in% names(.)) str_to_upper(as.character(ICAO)) else NA_character_,
+    CALL = if ("CALL" %in% names(.)) str_to_upper(as.character(CALL)) else NA_character_,
+    STATION_NAME_UP = str_to_upper(as.character(.data[[station_name_col]])),
+    BEGIN = suppressWarnings(as.integer(BEGIN)),
+    END   = suppressWarnings(as.integer(END)),
+    END   = ifelse(is.na(END), 99991231L, END)
+  )
+
+# ---- Helper: check if a NOAA URL exists ----
+url_exists <- function(url) {
+  tryCatch({
+    con <- url(url, open = "rb")
+    close(con)
+    TRUE
+  }, error = function(e) FALSE)
+}
+
+# ---- 3) Pick best USAF/WBAN match for each ICAO ----
+pick_isd_ids_best <- function(icao, start_date, end_date, years) {
+  start_num <- as.integer(format(as.Date(start_date), "%Y%m%d"))
+  end_num   <- as.integer(format(as.Date(end_date),   "%Y%m%d"))
+
+  # Try ICAO first (and CALL if present)
+  cand <- isd_hist %>%
+    filter(ICAO == icao | (!is.na(CALL) & CALL == icao)) %>%
+    filter(BEGIN <= end_num, END >= start_num) %>%
+    arrange(desc(END), desc(BEGIN))
+
+  # If not found, fall back to station name keywords
+  if (nrow(cand) == 0) {
+    key <- case_when(
+      icao == "KCLE" ~ "CLEVELAND HOPKINS",
+      icao == "KBKL" ~ "BURKE LAKEFRONT",
+      icao == "KCGF" ~ "CUYAHOGA",
+      TRUE ~ icao
+    )
+
+    cand <- isd_hist %>%
+      filter(str_detect(STATION_NAME_UP, key)) %>%
+      filter(BEGIN <= end_num, END >= start_num) %>%
+      arrange(desc(END), desc(BEGIN))
+  }
+
+  if (nrow(cand) == 0) {
+    stop("No station-history match found for ", icao, " covering your date window.")
+  }
+
+  # Choose first candidate that has files for all requested years
+  for (i in seq_len(nrow(cand))) {
+    usaf <- str_pad(as.character(cand$USAF[i]), 6, "left", "0")
+    wban <- str_pad(as.character(cand$WBAN[i]), 5, "left", "0")
+
+    ok_all_years <- all(sapply(years, function(yy) {
+      fname <- sprintf("%s-%s-%d.gz", usaf, wban, yy)
+      url <- sprintf("https://www.ncei.noaa.gov/pub/data/noaa/isd-lite/%d/%s", yy, fname)
+      url_exists(url)
+    }))
+
+    if (ok_all_years) {
+      return(cand[i, ] %>% select(USAF, WBAN, STATION_NAME_UP, ICAO, LAT, LON, BEGIN, END))
+    }
+  }
+
+  stop("Found metadata matches for ", icao, " but none had ISD-Lite files for 2023 & 2024.")
+}
+
+# ---- 4) Download + unzip ISD-Lite for a given year ----
+download_isd_lite_txt <- function(usaf, wban, year, out_dir) {
+  usaf <- str_pad(as.character(usaf), 6, "left", "0")
+  wban <- str_pad(as.character(wban), 5, "left", "0")
+
+  fname_gz <- sprintf("%s-%s-%d.gz", usaf, wban, year)
+  url <- sprintf("https://www.ncei.noaa.gov/pub/data/noaa/isd-lite/%d/%s", year, fname_gz)
+
+  local_gz  <- file.path(out_dir, fname_gz)
+  local_txt <- sub("\\.gz$", "", local_gz)
+
+  if (!file.exists(local_gz)) {
+    message("Downloading: ", url)
+    download.file(url, local_gz, mode = "wb", quiet = TRUE)
+  } else {
+    message("Already downloaded: ", local_gz)
+  }
+
+  if (!file.exists(local_txt)) {
+    gunzip(local_gz, destname = local_txt, overwrite = TRUE, remove = FALSE)
+  }
+
+  local_txt
+}
+
+# ---- 5) Read ISD-Lite (hourly) ----
+read_isd_lite <- function(txt_file, station_icao) {
+  read_table(
+    txt_file,
+    col_names = c("year","month","day","hour",
+                  "temp_x10","dew_x10","slp_x10",
+                  "wind_dir","wind_spd_x10","sky_cov",
+                  "prec1h_x10","prec6h_x10"),
+    col_types = cols(.default = col_integer())
+  ) %>%
+    mutate(
+      station_icao = station_icao,
+      datetime_utc = as.POSIXct(
+        sprintf("%04d-%02d-%02d %02d:00:00", year, month, day, hour),
+        tz = "UTC"
+      ),
+      date_utc = as.Date(datetime_utc, tz = "UTC")
+    )
+}
+
+# ---- 6) Main loop: build + save one file per station ----
+for (icao in stations) {
+
+  message("\n=== Processing ", icao, " ===")
+
+  ids <- pick_isd_ids_best(icao, start_date, end_date, years)
+  message("Using match: ", ids$STATION_NAME_UP, " | USAF=", ids$USAF, " WBAN=", ids$WBAN)
+
+  station_years <- lapply(years, function(yy) {
+    txt <- download_isd_lite_txt(ids$USAF, ids$WBAN, yy, out_dir)
+    read_isd_lite(txt, station_icao = icao)
+  })
+
+  station_df <- bind_rows(station_years) %>%
+    filter(date_utc >= start_date, date_utc <= end_date) %>%
+    select(station_icao, datetime_utc, everything(), -date_utc) %>%
+    arrange(datetime_utc)
+
+  csv_out <- file.path(out_dir, sprintf("NOAA_ISDlite_hourly_%s_2023-01-01_to_2024-12-31.csv", icao))
+  rds_out <- file.path(out_dir, sprintf("NOAA_ISDlite_hourly_%s_2023-01-01_to_2024-12-31.rds", icao))
+
+  write_csv(station_df, csv_out)
+  saveRDS(station_df, rds_out)
+
+  message("Saved: ", csv_out)
+  message("Rows: ", nrow(station_df))
+}
+
+message("\nDone. Files are in: ", out_dir)
+
+```
+
+```{r}
+library(readr)
+library(dplyr)
+
+files <- list(
+  KCLE = "noaa_isd_lite_separate_2023_2024/NOAA_ISDlite_hourly_KCLE_2023-01-01_to_2024-12-31.csv",
+  KBKL = "noaa_isd_lite_separate_2023_2024/NOAA_ISDlite_hourly_KBKL_2023-01-01_to_2024-12-31.csv",
+  KCGF = "noaa_isd_lite_separate_2023_2024/NOAA_ISDlite_hourly_KCGF_2023-01-01_to_2024-12-31.csv"
+)
+
+summary_tbl <- lapply(names(files), function(nm) {
+  df <- read_csv(files[[nm]], show_col_types = FALSE)
+  data.frame(
+    station = nm,
+    rows = nrow(df),
+    start = min(df$datetime_utc, na.rm = TRUE),
+    end   = max(df$datetime_utc, na.rm = TRUE)
+  )
+}) %>% bind_rows()
+
+summary_tbl
+```
+
+```{r}
+
+# =========================
+# NOAA ISD-Lite hourly download (direct from NOAA)
+# Separate files for KCLE, KBKL, KCGF
+# Year: 2025 only
+# Date range: 2025-01-01 to 2025-12-31
+# Outputs: CSV + RDS per station
+# =========================
+
+# ---- Packages ----
+
+library(readr)
+library(dplyr)
+library(stringr)
+library(lubridate)
+library(R.utils)
+
+# ---- Settings ----
+stations <- c("KCLE", "KBKL", "KCGF")
+start_date <- as.Date("2025-01-01")
+end_date   <- as.Date("2025-12-31")
+years <- c(2025)
+
+out_dir <- "noaa_isd_lite_separate_2025"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+# ---- 1) Download NOAA station history ----
+meta_url  <- "https://www.ncei.noaa.gov/pub/data/noaa/isd-history.csv"
+meta_file <- file.path(out_dir, "isd-history.csv")
+if (!file.exists(meta_file)) download.file(meta_url, meta_file, mode = "wb")
+
+# ---- 2) Read metadata + normalize columns safely ----
+isd_hist_raw <- read_csv(meta_file, show_col_types = FALSE)
+
+# Detect station name column in YOUR file (includes "STATION NAME")
+station_name_col <- dplyr::case_when(
+  "STATION NAME" %in% names(isd_hist_raw) ~ "STATION NAME",
+  "STATION_NAME" %in% names(isd_hist_raw) ~ "STATION_NAME",
+  "STATION"      %in% names(isd_hist_raw) ~ "STATION",
+  "NAME"         %in% names(isd_hist_raw) ~ "NAME",
+  TRUE ~ NA_character_
+)
+
+if (is.na(station_name_col)) {
+  stop("Could not find a station name column in isd-history.csv. Columns are:\n",
+       paste(names(isd_hist_raw), collapse = ", "))
+}
+
+isd_hist <- isd_hist_raw %>%
+  mutate(
+    ICAO = if ("ICAO" %in% names(.)) str_to_upper(as.character(ICAO)) else NA_character_,
+    CALL = if ("CALL" %in% names(.)) str_to_upper(as.character(CALL)) else NA_character_,
+    STATION_NAME_UP = str_to_upper(as.character(.data[[station_name_col]])),
+    BEGIN = suppressWarnings(as.integer(BEGIN)),
+    END   = suppressWarnings(as.integer(END)),
+    END   = ifelse(is.na(END), 99991231L, END)
+  )
+
+# ---- Helper: check if a NOAA URL exists ----
+url_exists <- function(url) {
+  tryCatch({
+    con <- url(url, open = "rb")
+    close(con)
+    TRUE
+  }, error = function(e) FALSE)
+}
+
+# ---- 3) Pick best USAF/WBAN match for each ICAO ----
+pick_isd_ids_best <- function(icao, start_date, end_date, years) {
+  start_num <- as.integer(format(as.Date(start_date), "%Y%m%d"))
+  end_num   <- as.integer(format(as.Date(end_date),   "%Y%m%d"))
+
+  # Try ICAO first (and CALL if present)
+  cand <- isd_hist %>%
+    filter(ICAO == icao | (!is.na(CALL) & CALL == icao)) %>%
+    filter(BEGIN <= end_num, END >= start_num) %>%
+    arrange(desc(END), desc(BEGIN))
+
+  # If not found, fall back to station name keywords
+  if (nrow(cand) == 0) {
+    key <- case_when(
+      icao == "KCLE" ~ "CLEVELAND HOPKINS",
+      icao == "KBKL" ~ "BURKE LAKEFRONT",
+      icao == "KCGF" ~ "CUYAHOGA",
+      TRUE ~ icao
+    )
+
+    cand <- isd_hist %>%
+      filter(str_detect(STATION_NAME_UP, key)) %>%
+      filter(BEGIN <= end_num, END >= start_num) %>%
+      arrange(desc(END), desc(BEGIN))
+  }
+
+  if (nrow(cand) == 0) {
+    stop("No station-history match found for ", icao, " covering your date window.")
+  }
+
+  # Choose first candidate that has files for all requested years
+  for (i in seq_len(nrow(cand))) {
+    usaf <- str_pad(as.character(cand$USAF[i]), 6, "left", "0")
+    wban <- str_pad(as.character(cand$WBAN[i]), 5, "left", "0")
+
+    ok_all_years <- all(sapply(years, function(yy) {
+      fname <- sprintf("%s-%s-%d.gz", usaf, wban, yy)
+      url <- sprintf("https://www.ncei.noaa.gov/pub/data/noaa/isd-lite/%d/%s", yy, fname)
+      url_exists(url)
+    }))
+
+    if (ok_all_years) {
+      return(cand[i, ] %>% select(USAF, WBAN, STATION_NAME_UP, ICAO, LAT, LON, BEGIN, END))
+    }
+  }
+
+  stop("Found metadata matches for ", icao, " but none had ISD-Lite files for the requested year(s).")
+}
+
+# ---- 4) Download + unzip ISD-Lite for a given year ----
+download_isd_lite_txt <- function(usaf, wban, year, out_dir) {
+  usaf <- str_pad(as.character(usaf), 6, "left", "0")
+  wban <- str_pad(as.character(wban), 5, "left", "0")
+
+  fname_gz <- sprintf("%s-%s-%d.gz", usaf, wban, year)
+  url <- sprintf("https://www.ncei.noaa.gov/pub/data/noaa/isd-lite/%d/%s", year, fname_gz)
+
+  local_gz  <- file.path(out_dir, fname_gz)
+  local_txt <- sub("\\.gz$", "", local_gz)
+
+  if (!file.exists(local_gz)) {
+    message("Downloading: ", url)
+    download.file(url, local_gz, mode = "wb", quiet = TRUE)
+  } else {
+    message("Already downloaded: ", local_gz)
+  }
+
+  if (!file.exists(local_txt)) {
+    gunzip(local_gz, destname = local_txt, overwrite = TRUE, remove = FALSE)
+  }
+
+  local_txt
+}
+
+# ---- 5) Read ISD-Lite (hourly) ----
+read_isd_lite <- function(txt_file, station_icao) {
+  read_table(
+    txt_file,
+    col_names = c("year","month","day","hour",
+                  "temp_x10","dew_x10","slp_x10",
+                  "wind_dir","wind_spd_x10","sky_cov",
+                  "prec1h_x10","prec6h_x10"),
+    col_types = cols(.default = col_integer())
+  ) %>%
+    mutate(
+      station_icao = station_icao,
+      datetime_utc = as.POSIXct(
+        sprintf("%04d-%02d-%02d %02d:00:00", year, month, day, hour),
+        tz = "UTC"
+      ),
+      date_utc = as.Date(datetime_utc, tz = "UTC")
+    )
+}
+
+# ---- 6) Main loop: build + save one file per station ----
+for (icao in stations) {
+
+  message("\n=== Processing ", icao, " ===")
+
+  ids <- pick_isd_ids_best(icao, start_date, end_date, years)
+  message("Using match: ", ids$STATION_NAME_UP, " | USAF=", ids$USAF, " WBAN=", ids$WBAN)
+
+  station_years <- lapply(years, function(yy) {
+    txt <- download_isd_lite_txt(ids$USAF, ids$WBAN, yy, out_dir)
+    read_isd_lite(txt, station_icao = icao)
+  })
+
+  station_df <- bind_rows(station_years) %>%
+    filter(date_utc >= start_date, date_utc <= end_date) %>%
+    select(station_icao, datetime_utc, everything(), -date_utc) %>%
+    arrange(datetime_utc)
+
+  csv_out <- file.path(out_dir, sprintf("NOAA_ISDlite_hourly_%s_2025-01-01_to_2025-12-31.csv", icao))
+  rds_out <- file.path(out_dir, sprintf("NOAA_ISDlite_hourly_%s_2025-01-01_to_2025-12-31.rds", icao))
+
+  write_csv(station_df, csv_out)
+  saveRDS(station_df, rds_out)
+
+  message("Saved: ", csv_out)
+  message("Rows: ", nrow(station_df))
+}
+
+message("\nDone. Files are in: ", out_dir)
+
+```
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

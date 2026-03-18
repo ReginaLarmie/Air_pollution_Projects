@@ -1,0 +1,565 @@
+---
+title: "CLEANinCLE Time gap Analysis"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(dplyr)
+library(readr)
+
+# Load your data (if not already loaded)
+cinc_raw <- read_csv("CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
+
+# Filter for PM2.5 ("mc_pm2_5") and devices 21 and 24
+pm25_21_24 <- cinc_raw %>%
+  filter(measure_name == "mc_pm2_5", device_number %in% c(21, 24))
+
+# Check the result
+head(pm25_21_24)
+
+write_csv(pm25_21_24, "CinC_PM25_Device21_24.csv")
+
+```
+
+```{r}
+library(dplyr)
+library(lubridate)
+
+# 1. Keep only PM2.5 and add a Date column
+cinc_pm25 <- cinc_raw %>%
+  filter(measure_name == "mc_pm2_5") %>%
+  mutate(Date = as.Date(time))
+
+# 2. Filter for Jan 1–14 (change year if needed)
+cinc_jan1_14 <- cinc_pm25 %>%
+  filter(Date >= as.Date("2025-01-01"),
+         Date <= as.Date("2025-01-14")) %>%
+  select(device_number, time, value)
+
+# Look at the first few rows
+head(cinc_jan1_14)
+
+filter(Date >= as.Date("2024-01-01"),
+       Date <= as.Date("2024-01-14"))
+
+# Lowest value (overall, Jan 1–14)
+lowest_pm25 <- cinc_jan1_14 %>%
+  slice_min(value, n = 1, with_ties = FALSE)
+
+lowest_pm25
+
+# Highest value (overall, Jan 1–14)
+highest_pm25 <- cinc_jan1_14 %>%
+  slice_max(value, n = 1, with_ties = FALSE)
+
+highest_pm25
+
+cinc_jan1_14_day_stats <- cinc_pm25 %>%
+  filter(Date >= as.Date("2025-01-01"),
+         Date <= as.Date("2025-01-14")) %>%
+  group_by(Date) %>%
+  summarise(
+    min_value = min(value, na.rm = TRUE),
+    max_value = max(value, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+View(cinc_jan1_14_day_stats)
+
+write.csv(cinc_jan1_14, "CinC_PM25_Jan1_14.csv", row.names = FALSE)
+
+```
+
+
+```{r}
+library(dplyr)
+library(lubridate)
+
+# 1. Filter ONLY PM2.5, convert date, and extract Device 24 readings
+cinc_dev24 <- cinc_raw %>%
+  filter(measure_name == "mc_pm2_5",
+         device_number == 24) %>%
+  mutate(Date = as.Date(time)) %>%
+  filter(Date >= as.Date("2025-01-01"),
+         Date <= as.Date("2025-01-14")) %>%
+  select(device_number, time, value)
+
+# View the filtered dataset
+View(cinc_dev24)
+
+lowest_dev24 <- cinc_dev24 %>%
+  slice_min(value, n = 1, with_ties = FALSE)
+
+lowest_dev24
+
+lowest_dev24 <- cinc_dev24 %>%
+  slice_min(value, n = 1, with_ties = FALSE)
+
+lowest_dev24
+
+write.csv(cinc_dev24, "CinC_Device24_Jan1_14.csv", row.names = FALSE)
+```
+
+```{r}
+
+# Load libraries
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+
+# STEP 1: Load your CLEANinCLE data
+cinc <- read_csv("CLEANinCLE_Raw_Air_Quality_Data_2024-11-2025-05.csv")
+
+# STEP 2: Filter for Device 24 and just PM2.5 and time columns
+
+device_24 <- cinc %>%
+  filter(device_number == 24, measure_name == "mc_pm2_5") %>%
+  select(time, pm25 = value) %>%
+  mutate(time = ymd_hms(time)) %>%
+  arrange(time)
+# STEP 3: Calculate time gaps between readings
+device_24 <- device_24 %>%
+  mutate(time_diff_mins = as.numeric(difftime(time, lag(time), units = "mins")))
+
+# STEP 4: Bin the time gaps
+device_24 <- device_24 %>%
+  mutate(gap_bin = cut(
+    time_diff_mins,
+    breaks = c(seq(0, 60, by = 5), Inf),
+    labels = c("0-5", "5-10", "10-15", "15-20", "20-25", "25-30",
+               "30-35", "35-40", "40-45", "45-50", "50-55", "55-60", ">60"),
+    right = FALSE
+  ))
+
+# STEP 5: Plot the histogram
+ggplot(device_24, aes(x = gap_bin)) +
+  geom_bar(fill = "steelblue", color = "black") +
+  labs(
+    title = "Time Gaps Between PM2.5 Readings for Device 24",
+    x = "Time Gap (minutes)",
+    y = "Frequency"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+```{r}
+
+library(tidyverse)
+library(lubridate)
+
+# Filter PM2.5 for Device 24 and prepare data
+device_24 <- cinc %>%
+  filter(device_number == 24, measure_name == "mc_pm2_5") %>%
+  select(time, pm25 = value) %>%
+  mutate(time = ymd_hms(time)) %>%
+  arrange(time) %>%
+  mutate(time_diff_mins = as.numeric(difftime(time, lag(time), units = "mins"))) %>%
+  filter(time_diff_mins <= 60) %>%  # Exclude gaps > 60 min
+  mutate(gap_bin = cut(
+    time_diff_mins,
+    breaks = c(seq(0, 60, by = 5)),
+    labels = c("0–5", "5–10", "10–15", "15–20", "20–25", "25–30",
+               "30–35", "35–40", "40–45", "45–50", "50–55", "55–60"),
+    right = FALSE
+  ))
+
+# Calculate bin counts and mode
+gap_counts_24 <- device_24 %>%
+  count(gap_bin, name = "count") %>%
+  filter(!is.na(gap_bin))
+
+mode_bin_24 <- gap_counts_24 %>%
+  filter(count == max(count)) %>%
+  pull(gap_bin) %>%
+  as.character()
+
+# Map bin label to midpoint for the vertical line
+bin_midpoints <- c(
+  "0–5" = 2.5, "5–10" = 7.5, "10–15" = 12.5, "15–20" = 17.5,
+  "20–25" = 22.5, "25–30" = 27.5, "30–35" = 32.5, "35–40" = 37.5,
+  "40–45" = 42.5, "45–50" = 47.5, "50–55" = 52.5, "55–60" = 57.5
+)
+mode_x_24 <- bin_midpoints[mode_bin_24]
+
+# Plot
+ggplot(gap_counts_24, aes(x = gap_bin, y = count)) +
+  geom_bar(stat = "identity", fill = "orange", color = "black") +
+  geom_text(aes(label = count), vjust = -0.5, size = 3.5) +
+  geom_vline(xintercept = which(levels(gap_counts_24$gap_bin) == mode_bin_24),
+             linetype = "dashed", color = "red", linewidth = 1) +
+  annotate("text", x = which(levels(gap_counts_24$gap_bin) == mode_bin_24),
+           y = max(gap_counts_24$count) + 100,
+           label = paste0("Most frequent: ", mode_x_24, " min"),
+           color = "red", hjust = 0.5, size = 4.2) +
+  labs(
+    title = "Time Gaps Between PM2.5 Readings for Device 24",
+    x = "Time Gap (minutes)",
+    y = "Frequency"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+# Load necessary packages
+library(tidyverse)
+library(lubridate)
+
+# Filter for Device 7 and PM2.5 readings
+device_7 <- cinc %>%
+  filter(device_number == 7, measure_name == "mc_pm2_5") %>%
+  mutate(time = ymd_hms(time)) %>%
+  arrange(time)
+
+# Calculate time difference in minutes between consecutive readings
+device_7 <- device_7 %>%
+  mutate(time_gap_min = as.numeric(difftime(time, lag(time), units = "mins")))
+
+# Filter to exclude gaps > 60 min (those are treated as data loss)
+device_7_gap_valid <- device_7 %>%
+  filter(time_gap_min <= 60)
+
+# Create histogram
+ggplot(device_7_gap_valid, aes(x = time_gap_min)) +
+  geom_histogram(
+    breaks = seq(0, 60, by = 5),
+    color = "black", fill = "#69b3a2", boundary = 0, closed = "left"
+  ) +
+  labs(
+    title = "Time Gaps Between PM2.5 Readings for Device-7",
+    x = "Time Gap (minutes)",
+    y = "Frequency"
+  ) +
+  scale_x_continuous(breaks = seq(0, 60, 5)) +
+  theme_minimal()
+
+
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+
+# Filter for Device 7 and select only PM2.5 readings
+device_7 <- cinc %>%
+  filter(device_number == 7, measure_name == "mc_pm2_5") %>%
+  mutate(time = ymd_hms(time)) %>%
+  arrange(time)
+
+# Calculate time gaps between consecutive readings (in minutes)
+device_7 <- device_7 %>%
+  mutate(time_gap = as.numeric(difftime(time, lag(time), units = "mins"))) %>%
+  filter(!is.na(time_gap))
+
+# Cap gaps > 60 min to NA (to exclude from plot)
+filtered_gaps <- device_7 %>%
+  filter(time_gap <= 60)
+
+# Create histogram
+hist_plot <- ggplot(filtered_gaps, aes(x = time_gap)) +
+  geom_histogram(
+    breaks = seq(0, 60, by = 5),
+    fill = "#4c72b0",
+    color = "black",
+    closed = "left"
+  ) +
+  labs(
+    title = "Time Gaps Between PM2.5 Readings for Device 7",
+    x = "Time Gap (minutes)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+# Calculate mode (most frequent time gap bin)
+gap_counts <- hist(filtered_gaps$time_gap, breaks = seq(0, 60, 5), plot = FALSE)
+mode_bin <- gap_counts$mids[which.max(gap_counts$counts)]
+
+# Add vertical line at mode and label it
+hist_plot + 
+  geom_vline(xintercept = mode_bin, color = "red", linetype = "dashed", size = 1) +
+  annotate("text", x = mode_bin + 1.5, y = max(gap_counts$counts), 
+           label = paste("Most frequent:", mode_bin, "min"), 
+           color = "red", hjust = 0, size = 4) +
+  stat_bin(
+    breaks = seq(0, 60, 5),
+    geom = "text",
+    aes(label = ..count..),
+    vjust = -0.5,
+    size = 3
+  )
+
+```
+
+```{r}
+# Filter PM2.5 for Device 7 and prepare data
+device_7 <- cinc %>%
+  filter(device_number == 7, measure_name == "mc_pm2_5") %>%
+  select(time, pm25 = value) %>%
+  mutate(time = ymd_hms(time)) %>%
+  arrange(time) %>%
+  mutate(time_diff_mins = as.numeric(difftime(time, lag(time), units = "mins"))) %>%
+  filter(time_diff_mins <= 60) %>%
+  mutate(gap_bin = cut(
+    time_diff_mins,
+    breaks = c(seq(0, 60, by = 5)),
+    labels = c("0–5", "5–10", "10–15", "15–20", "20–25", "25–30",
+               "30–35", "35–40", "40–45", "45–50", "50–55", "55–60"),
+    right = FALSE
+  ))
+
+# Bin counts and mode
+gap_counts_7 <- device_7 %>%
+  count(gap_bin, name = "count") %>%
+  filter(!is.na(gap_bin))
+
+mode_bin_7 <- gap_counts_7 %>%
+  filter(count == max(count)) %>%
+  pull(gap_bin) %>%
+  as.character()
+
+# Midpoints used for all devices
+bin_midpoints <- c(
+  "0–5" = 2.5, "5–10" = 7.5, "10–15" = 12.5, "15–20" = 17.5,
+  "20–25" = 22.5, "25–30" = 27.5, "30–35" = 32.5, "35–40" = 37.5,
+  "40–45" = 42.5, "45–50" = 47.5, "50–55" = 52.5, "55–60" = 57.5
+)
+mode_x_7 <- bin_midpoints[mode_bin_7]
+
+# Plot
+ggplot(gap_counts_7, aes(x = gap_bin, y = count)) +
+  geom_bar(stat = "identity", fill = "steelblue", color = "black") +
+  geom_text(aes(label = count), vjust = -0.5, size = 3.5) +
+  geom_vline(xintercept = which(levels(gap_counts_7$gap_bin) == mode_bin_7),
+             linetype = "dashed", color = "red", linewidth = 1) +
+  annotate("text", x = which(levels(gap_counts_7$gap_bin) == mode_bin_7),
+           y = max(gap_counts_7$count) + 100,
+           label = paste0("Most frequent: ", mode_x_7, " min"),
+           color = "red", hjust = 0.5, size = 4.2) +
+  labs(
+    title = "Time Gaps Between PM2.5 Readings for Device 7",
+    x = "Time Gap (minutes)",
+    y = "Frequency"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+
+```{r}
+# Filter PM2.5 for Device 17 and prepare data
+device_17 <- cinc %>%
+  filter(device_number == 17, measure_name == "mc_pm2_5") %>%
+  select(time, pm25 = value) %>%
+  mutate(time = ymd_hms(time)) %>%
+  arrange(time) %>%
+  mutate(time_diff_mins = as.numeric(difftime(time, lag(time), units = "mins"))) %>%
+  filter(time_diff_mins <= 60) %>%
+  mutate(gap_bin = cut(
+    time_diff_mins,
+    breaks = c(seq(0, 60, by = 5)),
+    labels = c("0–5", "5–10", "10–15", "15–20", "20–25", "25–30",
+               "30–35", "35–40", "40–45", "45–50", "50–55", "55–60"),
+    right = FALSE
+  ))
+
+# Bin counts and mode
+gap_counts_17 <- device_17 %>%
+  count(gap_bin, name = "count") %>%
+  filter(!is.na(gap_bin))
+
+mode_bin_17 <- gap_counts_17 %>%
+  filter(count == max(count)) %>%
+  pull(gap_bin) %>%
+  as.character()
+
+mode_x_17 <- bin_midpoints[mode_bin_17]
+
+# Plot
+ggplot(gap_counts_17, aes(x = gap_bin, y = count)) +
+  geom_bar(stat = "identity", fill = "yellow", color = "black") +
+  geom_text(aes(label = count), vjust = -0.5, size = 3.5) +
+  geom_vline(xintercept = which(levels(gap_counts_17$gap_bin) == mode_bin_17),
+             linetype = "dashed", color = "red", linewidth = 1) +
+  annotate("text", x = which(levels(gap_counts_17$gap_bin) == mode_bin_17),
+           y = max(gap_counts_17$count) + 100,
+           label = paste0("Most frequent: ", mode_x_17, " min"),
+           color = "red", hjust = 0.5, size = 4.2) +
+  labs(
+    title = "Time Gaps Between PM2.5 Readings for Device 17",
+    x = "Time Gap (minutes)",
+    y = "Frequency"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r}
+library(tidyverse)
+library(lubridate)
+
+# Step 1. Filter for PM2.5 readings and clean structure
+cinc_clean <- cinc_raw %>%
+  filter(measure_name == "mc_pm2_5") %>%     # correct PM2.5 variable
+  rename(
+    datetime = time,
+    pm25 = value,
+    device = device_number
+  ) %>%
+  mutate(datetime = ymd_hms(datetime),
+         date = as.Date(datetime))
+
+# Step 2. Compute 24-hour average per device
+cinc_daily_avg <- cinc_clean %>%
+  group_by(device, date, location_name, latitude, longitude) %>%
+  summarize(pm25_24hr_avg = mean(pm25, na.rm = TRUE), .groups = "drop")
+
+# Step 3. Filter for Pair 3 (Devices 21 and 24)
+cinc_pair3 <- cinc_daily_avg %>%
+  filter(device %in% c(21, 24)) %>%
+  arrange(device, date)
+
+# Step 4. View results
+print(cinc_pair3)
+
+# Optional: Save to CSV for comparison with Jerry’s data
+write_csv(cinc_pair3, "CinC_PM25_24hr_Pair3.csv")
+
+```
+
+
+```{r}
+library(tidyverse)
+library(lubridate)
+
+# Step 1. Filter for PM2.5 readings and clean structure
+cinc_clean <- cinc_raw %>%
+  filter(measure_name == "mc_pm2_5") %>%     # correct PM2.5 field name
+  rename(
+    datetime = time,
+    pm25 = value,
+    device = device_number
+  ) %>%
+  mutate(datetime = ymd_hms(datetime),
+         date = as.Date(datetime))
+
+# Step 2. Compute 24-hour average per device and keep device_eui
+cinc_daily_avg <- cinc_clean %>%
+  group_by(device, device_eui, date, location_name, latitude, longitude) %>%
+  summarize(pm25_24hr_avg = mean(pm25, na.rm = TRUE), .groups = "drop")
+
+# Step 3. Filter for Pair 3 (Devices 21 and 24)
+cinc_pair3 <- cinc_daily_avg %>%
+  filter(device %in% c(21, 24)) %>%
+  arrange(device, date)
+
+# Step 4. View or export results
+print(cinc_pair3)
+write_csv(cinc_pair3, "CinC_PM25_24hr_Pair3_with_EUI.csv")
+
+
+```
+
+
+```{r}
+# Load required libraries
+library(tidyverse)
+library(readxl)
+library(lubridate)
+library(ggplot2)
+
+# STEP 1: Load your CinC PM2.5 24hr dataset
+# Adjust this if you already loaded it into cinc_yours or cinc_pair3
+# cinc_yours <- read_csv("CinC_PM25_24hr_Pair3_with_EUI.csv")
+
+# STEP 2: Load Jerry's CinC 24hr dataset
+jerry_cinc <- read_excel("daily_means_2024-11-01_to_2025-05-31.xls")
+
+# STEP 3: Clean and prepare Jerry's data
+jerry_clean <- jerry_cinc %>%
+  rename(
+    device_eui = device_eui,
+    date = date_local,
+    jerry_pm25 = pm25_mean
+  ) %>%
+  mutate(date = as.Date(date))
+
+# STEP 4: Prepare your CinC data
+your_clean <- cinc_yours %>%
+  select(device_eui, date, your_pm25 = pm25_24hr_avg) %>%
+  mutate(date = as.Date(date))
+
+# STEP 5: Merge both datasets by date and device_eui
+cinc_compare <- left_join(your_clean, jerry_clean, by = c("date", "device_eui")) %>%
+  mutate(
+    your_pm25 = as.numeric(your_pm25),
+    jerry_pm25 = as.numeric(jerry_pm25)
+  )
+
+# STEP 6: Identify mismatches
+cinc_compare <- cinc_compare %>%
+  mutate(
+    difference = abs(your_pm25 - jerry_pm25),
+    match_status = ifelse(is.na(jerry_pm25) | is.na(your_pm25), "Missing",
+                   ifelse(difference <= 2, "Match", "Mismatch"))
+  )
+
+# STEP 7: View mismatched values
+mismatches <- cinc_compare %>% filter(match_status == "Mismatch")
+print(mismatches)
+
+# STEP 8: Plotting the comparison
+ggplot(cinc_compare, aes(x = your_pm25, y = jerry_pm25, color = match_status)) +
+  geom_point(size = 2, alpha = 0.8) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray40") +
+  facet_wrap(~device_eui) +
+  labs(
+    title = "CinC PM2.5 24hr Avg: Regina vs Jerry",
+    x = "Regina's PM2.5 (µg/m³)",
+    y = "Jerry's PM2.5 (µg/m³)"
+  ) +
+  theme_minimal()
+
+```
+
+```{r}
+library(dplyr)
+
+# Ensure numeric format
+cinc_compare <- left_join(your_clean, jerry_clean, by = c("date", "device_eui")) %>%
+  mutate(
+    your_pm25 = as.numeric(your_pm25),
+    jerry_pm25 = as.numeric(jerry_pm25),
+    difference = abs(your_pm25 - jerry_pm25),
+    match_status = case_when(
+      is.na(your_pm25) | is.na(jerry_pm25) ~ "Missing",
+      difference <= 2 ~ "Match",
+      TRUE ~ "Mismatch"
+    )
+  )
+
+# Create comparison table
+comparison_table <- cinc_compare %>%
+  select(device_eui, date, your_pm25, jerry_pm25, difference, match_status)
+
+# View it in the RStudio Viewer or print the first few rows
+View(comparison_table)  # For RStudio users
+head(comparison_table, 20)  # Print first 20 rows in console
+
+
+write.csv(comparison_table, "CinC_PM25_Comparison.csv", row.names = FALSE)
+
+```
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

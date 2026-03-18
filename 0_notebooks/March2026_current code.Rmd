@@ -1,0 +1,1548 @@
+---
+title: "Untitled"
+author: "CLEANINCLE API"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# CLEANinCLE API
+
+```{r}
+library(httr2)
+library(jsonlite)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(lubridate)
+
+
+# 1. API settings
+
+api_url <- "https://data.cleanincle.issacs.dev"
+api_key <- "2KYc26u6sn6bPAaZHJx5R3DSzQL8Y6sV38hy0c3t"
+
+params <- list(
+  start_date = "2024-11-01T00:00:00Z",
+  end_date   = "2026-01-01T00:00:00Z"
+)
+
+# 2. Download all pages
+# -----------------------------
+all_records <- list()
+current_params <- params
+
+message("Starting CLEANinCLE API download...")
+
+repeat {
+  resp <- request(api_url) |>
+    req_headers(`x-api-key` = api_key) |>
+    req_url_query(!!!current_params) |>
+    req_retry(max_tries = 3) |>
+    req_perform()
+
+  body <- resp_body_json(resp, simplifyVector = FALSE)
+
+  all_records <- c(all_records, body$records)
+
+  if (is.null(body$next_token)) break
+
+  current_params$next_token <- body$next_token
+}
+
+# -----------------------------
+# 3. Convert to dataframe
+# -----------------------------
+df_raw <- bind_rows(all_records)
+
+df_raw <- df_raw %>%
+  unnest_wider(where(is.list), names_sep = "_")
+
+# -----------------------------
+# 4. Save raw downloaded file
+# -----------------------------
+write_csv(df_raw, "CLEANinCLE_raw_2024-11_to_2025-12.csv")
+saveRDS(df_raw, "CLEANinCLE_raw_2024-11_to_2025-12.rds")
+
+message("Download complete.")
+dim(df_raw)
+names(df_raw)
+
+```
+
+
+# PM2.5-only CLEANinCLE dataset
+```{r}
+library(dplyr)
+library(lubridate)
+library(readr)
+
+cinc_pm25 <- df_raw %>%
+  mutate(
+    time = ymd_hms(time, tz = "UTC"),
+    date = as.Date(time),
+    pm_2.5 = as.numeric(pm_2.5)
+  ) %>%
+  select(
+    device_eui,
+    location_name,
+    latitude,
+    longitude,
+    device_number,
+    device_status,
+    time,
+    date,
+    pm_2.5
+  ) %>%
+  filter(!is.na(pm_2.5)) %>%
+  arrange(device_number, time)
+
+# Save PM2.5-only dataset
+write_csv(cinc_pm25, "CLEANinCLE_PM25_2024-11_to_2025-12.csv")
+saveRDS(cinc_pm25, "CLEANinCLE_PM25_2024-11_to_2025-12.rds")
+
+# Checks
+dim(cinc_pm25)
+names(cinc_pm25)
+head(cinc_pm25)
+range(cinc_pm25$time, na.rm = TRUE)
+```
+
+# Exploratory Data Analysis - Sensors in the dataset
+```{r}
+# CinC devices present
+cinc_pm25 %>%
+  distinct(device_number, location_name) %>%
+  arrange(device_number)
+
+# Number of observations per device
+cinc_pm25 %>%
+  count(device_number, location_name, sort = TRUE)
+
+# missing PM2.5 values (filtered NAs)
+sum(is.na(cinc_pm25$pm_2.5))
+
+# PM2.5 statistics (Detect outliers or unrealistic values)
+summary(cinc_pm25$pm_2.5)
+
+# PM2.5 distribution (Histogram) - [if values are skewed/there are extreme spikes]
+library(ggplot2)
+
+ggplot(cinc_pm25, aes(x = pm_2.5)) +
+  geom_histogram(bins = 50) +
+  labs(
+    title = "Distribution of PM2.5 Measurements (CLEANinCLE)",
+    x = "PM2.5 (µg/m³)",
+    y = "Frequency"
+  )
+
+# Time coverage check
+range(cinc_pm25$time)
+
+# Time series preview (to confirm the time data behaves correctly)
+library(ggplot2)
+
+ggplot(
+  cinc_pm25 %>% filter(device_number == unique(device_number)[1]),
+  aes(time, pm_2.5)
+) +
+  geom_point(alpha = 0.4, size = 0.7) +
+  scale_x_datetime(
+    date_breaks = "1 month",
+    date_labels = "%b %Y"
+  ) +
+  labs(
+    title = "PM2.5 Time Series (One CinC Sensor)",
+    x = "Time",
+    y = "PM2.5 (µg/m³)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplot(
+  cinc_pm25 %>% filter(device_number == unique(device_number)[1]),
+  aes(time, pm_2.5)
+) +
+  geom_point(alpha = 0.4, size = 0.7) +
+  scale_x_datetime(
+    limits = as.POSIXct(c("2024-11-01", "2025-12-31")),
+    date_breaks = "1 month",
+    date_labels = "%b %Y"
+  ) +
+  labs(
+    title = "PM2.5 Time Series (One CinC Sensor)",
+    x = "Time",
+    y = "PM2.5 (µg/m³)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+cinc_pm25 %>%
+  filter(device_number == unique(device_number)[1]) %>%
+  count(month = lubridate::floor_date(time, "month"))
+
+```
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# get all device numbers
+device_ids <- sort(unique(cinc_pm25$device_number))
+
+# create folder to save plots
+dir.create("CinC_PM25_timeseries_plots", showWarnings = FALSE)
+
+for (dev in device_ids) {
+  
+  sensor_data <- cinc_pm25 %>% filter(device_number == dev)
+  loc_name <- unique(sensor_data$location_name)[1]
+  
+  p <- ggplot(sensor_data, aes(time, pm_2.5)) +
+    geom_point(alpha = 0.4, size = 0.7) +
+    scale_x_datetime(
+      limits = as.POSIXct(c("2024-11-01", "2025-12-31")),
+      date_breaks = "1 month",
+      date_labels = "%b %Y"
+    ) +
+    labs(
+      title = paste("PM2.5 Time Series - Device", dev, "-", loc_name),
+      x = "Time",
+      y = "PM2.5 (µg/m³)"
+    ) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  print(p)
+  
+  ggsave(
+    filename = paste0("CinC_PM25_timeseries_plots/CinC_sensor_", dev, ".png"),
+    plot = p,
+    width = 10,
+    height = 5,
+    dpi = 300
+  )
+}
+
+```
+
+```{r}
+# Sensor coverage summary (start, end, number of observations)
+cinc_pm25 %>%
+  mutate(month = lubridate::floor_date(time, "month")) %>%
+  count(device_number, location_name, month) %>%
+  arrange(device_number, month)
+
+library(gt)
+
+cinc_summary <- cinc_pm25 %>%
+  group_by(device_number, location_name) %>%
+  summarise(
+    start_time = min(time, na.rm = TRUE),
+    end_time = max(time, na.rm = TRUE),
+    n_obs = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(device_number)
+
+gt_table <- gt(cinc_summary)
+
+gtsave(gt_table, "CLEANinCLE_sensor_summary.pdf")
+
+# Monthly coverage for all sensors (shows how many measurements each sensor has per month)
+cinc_pm25 %>%
+  mutate(month = lubridate::floor_date(time, "month")) %>%
+  count(device_number, location_name, month) %>%
+  arrange(device_number, month)
+
+cinc_pm25 %>%
+  mutate(
+    month = lubridate::floor_date(time, "month"),
+    device_number = factor(device_number)
+  ) %>%
+  distinct(device_number, location_name, month) %>%
+  ggplot(aes(x = month, y = device_number)) +
+  geom_point(size = 2) +
+  scale_x_datetime(
+    limits = as.POSIXct(c("2024-11-01", "2025-12-31")),
+    date_breaks = "1 month",
+    date_labels = "%b %Y"
+  ) +
+  labs(
+    title = "CLEANinCLE Sensor Data Coverage",
+    x = "Month",
+    y = "Sensor"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+# Daily PM2.5 datasets
+```{r}
+cinc_daily <- cinc_pm25 %>%
+  group_by(device_number, date) %>%
+  summarise(
+    pm25_daily = mean(pm_2.5, na.rm = TRUE),
+    n_obs = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(device_number, date)
+
+# check
+dim(cinc_daily)
+head(cinc_daily)
+
+# Convert to WIDE format (To compare sensors, each sensor needs its own column)
+library(tidyr)
+
+cinc_daily_wide <- cinc_daily %>%
+  select(device_number, date, pm25_daily) %>%
+  pivot_wider(
+    names_from = device_number,
+    values_from = pm25_daily,
+    names_prefix = "device_"
+  )
+
+head(cinc_daily_wide)
+
+#Pairwise correlations between sensors (This tells which sensors behave similarly, which sensors disagree)
+# High correlation → sensors measure similar PM patterns.
+cor_matrix <- cor(
+  cinc_daily_wide %>% select(-date),
+  use = "pairwise.complete.obs"
+)
+
+cor_matrix
+write.csv(cor_matrix, "CinC_sensor_correlation_matrix.csv")
+
+#Visualize sensor agreement (This produces a sensor correlation heatmap)
+library(ggplot2)
+library(tidyr)
+
+cor_df <- as.data.frame(cor_matrix)
+
+cor_long <- cor_df %>%
+  tibble::rownames_to_column("Sensor1") %>%
+  pivot_longer(-Sensor1, names_to = "Sensor2", values_to = "correlation")
+
+ggplot(cor_long, aes(Sensor1, Sensor2, fill = correlation)) +
+  geom_tile() +
+  scale_fill_viridis_c() +
+  labs(
+    title = "Correlation Between CinC Sensors (Daily PM2.5)",
+    x = "Sensor",
+    y = "Sensor"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+```{r}
+library(pheatmap)
+
+pheatmap(
+  cor_matrix,
+  main = "Correlation Between CinC Sensors (Daily PM2.5)"
+)
+
+pdf("CinC_sensor_correlation_heatmap.pdf", width = 10, height = 8)
+
+dev.off()
+
+# Extract sensor coordinates
+
+library(dplyr)
+
+sensor_locations <- cinc_pm25 %>%
+  select(device_number, latitude, longitude) %>%
+  distinct() %>%
+  mutate(
+    latitude = as.numeric(latitude),
+    longitude = as.numeric(longitude),
+    sensor = paste0("device_", device_number)
+  ) %>%
+  arrange(device_number)
+
+sensor_locations
+str(sensor_locations)
+
+
+
+
+
+
+
+
+
+
+sensor_locations <- cinc_pm25 %>%
+  select(device_number, latitude, longitude) %>%
+  distinct() %>%
+  arrange(device_number)
+
+sensor_locations
+
+# distance between sensor
+library(geosphere)
+
+coords <- sensor_locations %>%
+  select(longitude, latitude)
+
+dist_matrix <- distm(coords, fun = distHaversine) / 1000
+
+library(tidyr)
+
+cor_long <- as.data.frame(as.table(cor_matrix))
+
+names(cor_long) <- c("sensor1","sensor2","correlation")
+
+sensor_compare <- cor_long %>%
+  left_join(dist_long, by = c("sensor1","sensor2"))
+
+head(cor_long)
+
+library(ggplot2)
+
+ggplot(sensor_compare, aes(distance_km, correlation)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", color = "red") +
+  labs(
+    title = "Sensor Similarity vs Distance",
+    x = "Distance Between Sensors (km)",
+    y = "Correlation of Daily PM2.5"
+  ) +
+  theme_minimal()
+```
+
+
+
+```{r}
+
+library(dplyr)
+
+sensor_locations <- cinc_pm25 %>%
+  select(device_number, latitude, longitude) %>%
+  distinct() %>%
+  mutate(
+    latitude = as.numeric(latitude),
+    longitude = as.numeric(longitude),
+    sensor = paste0("device_", device_number)
+  ) %>%
+  arrange(device_number)
+
+sensor_locations
+str(sensor_locations)
+
+library(geosphere)
+
+coords <- sensor_locations %>%
+  select(longitude, latitude) %>%
+  as.matrix()
+
+dist_matrix <- distm(coords, fun = distHaversine) / 1000
+
+rownames(dist_matrix) <- sensor_locations$sensor
+colnames(dist_matrix) <- sensor_locations$sensor
+
+dist_long <- as.data.frame(as.table(dist_matrix))
+colnames(dist_long) <- c("sensor1", "sensor2", "distance_km")
+
+head(dist_long)
+
+cor_long <- as.data.frame(as.table(cor_matrix))
+colnames(cor_long) <- c("sensor1", "sensor2", "correlation")
+
+head(cor_long)
+
+sensor_compare <- cor_long %>%
+  left_join(dist_long, by = c("sensor1", "sensor2")) %>%
+  filter(sensor1 != sensor2)
+
+head(sensor_compare)
+
+library(ggplot2)
+
+ggplot(sensor_compare, aes(x = distance_km, y = correlation)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm") +
+  labs(
+    title = "Correlation vs Distance Between CinC Sensors",
+    x = "Distance Between Sensors (km)",
+    y = "PM2.5 Correlation"
+  ) +
+  theme_minimal()
+```
+
+
+
+```{r}
+
+sensor_locations %>%
+  count(device_number)
+
+range(sensor_locations$latitude)
+range(sensor_locations$longitude)
+```
+
+```{r}
+sensor_locations_clean <- cinc_pm25 %>%
+  mutate(
+    latitude = as.numeric(latitude),
+    longitude = as.numeric(longitude)
+  ) %>%
+  filter(
+    !is.na(latitude),
+    !is.na(longitude),
+    latitude != 0,
+    longitude != 0
+  ) %>%
+  group_by(device_number) %>%
+  summarise(
+    latitude = first(latitude),
+    longitude = first(longitude),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    sensor = paste0("device_", device_number)
+  ) %>%
+  arrange(as.numeric(device_number))
+
+sensor_locations_clean %>%
+  count(device_number)
+
+range(sensor_locations_clean$latitude)
+range(sensor_locations_clean$longitude)
+
+sensor_locations_clean
+
+library(geosphere)
+
+coords <- sensor_locations_clean %>%
+  select(longitude, latitude) %>%
+  as.matrix()
+
+dist_matrix <- distm(coords, fun = distHaversine) / 1000
+
+rownames(dist_matrix) <- sensor_locations_clean$sensor
+colnames(dist_matrix) <- sensor_locations_clean$sensor
+
+dist_long <- as.data.frame(as.table(dist_matrix))
+colnames(dist_long) <- c("sensor1", "sensor2", "distance_km")
+
+head(dist_long)
+
+cor_long <- as.data.frame(as.table(cor_matrix))
+colnames(cor_long) <- c("sensor1", "sensor2", "correlation")
+
+sensor_compare <- cor_long %>%
+  left_join(dist_long, by = c("sensor1", "sensor2")) %>%
+  filter(sensor1 != sensor2)
+
+head(sensor_compare)
+
+library(ggplot2)
+
+ggplot(sensor_compare, aes(x = distance_km, y = correlation)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm") +
+  labs(
+    title = "Correlation vs Distance Between CinC Sensors",
+    x = "Distance Between Sensors (km)",
+    y = "PM2.5 Correlation"
+  ) +
+  theme_minimal()
+
+sensor_locations_clean %>% count(device_number)
+range(sensor_locations_clean$latitude)
+range(sensor_locations_clean$longitude)
+```
+
+
+
+```{r}
+library(ggplot2)
+library(maps)
+library(dplyr)
+
+county_map <- map_data("county")
+cuyahoga_map <- county_map %>%
+  filter(region == "ohio", subregion == "cuyahoga")
+
+ggplot() +
+  geom_polygon(
+    data = cuyahoga_map,
+    aes(x = long, y = lat, group = group),
+    fill = "gray95",
+    color = "black"
+  ) +
+  geom_point(
+    data = sensor_locations_clean,
+    aes(x = longitude, y = latitude),
+    color = "firebrick",
+    size = 3
+  ) +
+  coord_fixed(
+    xlim = c(-81.85, -81.45),
+    ylim = c(41.35, 41.65)
+  ) +
+  labs(
+    title = "CLEANinCLE Sensor Locations (Cuyahoga County)",
+    x = "Longitude",
+    y = "Latitude"
+  ) +
+  theme_minimal()
+```
+
+ # make one clean location per sensor
+```{r}
+sensor_locations_clean <- cinc_pm25 %>%
+  mutate(
+    latitude = as.numeric(latitude),
+    longitude = as.numeric(longitude)
+  ) %>%
+  filter(
+    !is.na(latitude),
+    !is.na(longitude),
+    latitude != 0,
+    longitude != 0
+  ) %>%
+  group_by(device_number) %>%
+  summarise(
+    latitude = first(latitude),
+    longitude = first(longitude),
+    .groups = "drop"
+  ) %>%
+  mutate(sensor = paste0("device_", device_number))
+
+# make the distance matrix
+library(geosphere)
+library(dplyr)
+
+coords <- sensor_locations_clean %>%
+  select(longitude, latitude) %>%
+  as.matrix()
+
+dist_matrix <- distm(coords, fun = distHaversine) / 1000
+
+rownames(dist_matrix) <- sensor_locations_clean$sensor
+colnames(dist_matrix) <- sensor_locations_clean$sensor
+
+# turn both matrices into long tables
+library(tidyr)
+
+cor_long <- as.data.frame(as.table(cor_matrix))
+colnames(cor_long) <- c("sensor1", "sensor2", "correlation")
+
+dist_long <- as.data.frame(as.table(dist_matrix))
+colnames(dist_long) <- c("sensor1", "sensor2", "distance_km")
+
+# join them
+sensor_compare <- cor_long %>%
+  left_join(dist_long, by = c("sensor1", "sensor2")) %>%
+  filter(sensor1 != sensor2)
+
+sensor_compare <- sensor_compare %>%
+  mutate(
+    sensor1 = as.character(sensor1),
+    sensor2 = as.character(sensor2)
+  )
+
+# remove duplicate pairs
+sensor_compare_unique <- sensor_compare %>%
+  rowwise() %>%
+  mutate(
+    pair1 = min(sensor1, sensor2),
+    pair2 = max(sensor1, sensor2)
+  ) %>%
+  ungroup() %>%
+  distinct(pair1, pair2, .keep_all = TRUE)
+
+# plot correlation vs distance
+library(ggplot2)
+
+ggplot(sensor_compare_unique, aes(distance_km, correlation)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(
+    title = "Correlation vs Distance Between CLEANinCLE Sensors",
+    x = "Distance between sensors (km)",
+    y = "Correlation of daily PM2.5"
+  ) +
+  theme_minimal()
+
+```
+# sensors with unusually low correlation
+```{r}
+sensor_compare_unique %>%
+  filter(correlation < 0.4) %>%
+  arrange(correlation)
+
+# average correlation by distance group
+sensor_compare_unique %>%
+  mutate(distance_group = cut(
+    distance_km,
+    breaks = c(0,2,5,10,20,30),
+    labels = c("0–2 km","2–5 km","5–10 km","10–20 km","20–30 km")
+  )) %>%
+  group_by(distance_group) %>%
+  summarise(mean_correlation = mean(correlation, na.rm = TRUE)) 
+```
+
+# pairwise comparison for CLEANinCLE sites using daily averages.
+```{r}
+# daily averages for each CinC sensor
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(reshape2)
+library(geosphere)
+
+# Daily averages for each CinC sensor
+cinc_daily <- cinc_pm25 %>%
+  mutate(date = as.Date(time)) %>%
+  group_by(device_number, date) %>%
+  summarise(
+    pm25_daily = mean(pm_2.5, na.rm = TRUE),
+    n_obs = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(device_number, date)
+
+head(cinc_daily)
+
+# Convert to wide format
+cinc_daily_wide <- cinc_daily %>%
+  pivot_wider(
+    names_from = device_number,
+    values_from = pm25_daily,
+    names_prefix = "device_"
+  )
+
+head(cinc_daily_wide)
+
+# pairwise correlation matrix
+cinc_cor_matrix <- cor(
+  cinc_daily_wide %>% select(-date),
+  use = "pairwise.complete.obs"
+)
+
+round(cinc_cor_matrix, 2)
+
+# Plot the CinC correlation heatmap
+cinc_cor_long <- melt(cinc_cor_matrix)
+
+ggplot(cinc_cor_long, aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_viridis_c(name = "Correlation") +
+  labs(
+    title = "Correlation Between CinC Sensors (Daily PM2.5)",
+    x = "Sensor",
+    y = "Sensor"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank()
+  )
+
+# clean sensor location table
+sensor_locations_clean <- cinc_pm25 %>%
+  mutate(
+    latitude = as.numeric(latitude),
+    longitude = as.numeric(longitude)
+  ) %>%
+  filter(
+    !is.na(latitude),
+    !is.na(longitude),
+    latitude != 0,
+    longitude != 0
+  ) %>%
+  group_by(device_number) %>%
+  summarise(
+    latitude = first(latitude),
+    longitude = first(longitude),
+    .groups = "drop"
+  ) %>%
+  mutate(sensor = paste0("device_", device_number)) %>%
+  arrange(sensor)
+
+sensor_locations_clean
+
+# distance matrix between CinC sensors
+coords <- sensor_locations_clean %>%
+  select(longitude, latitude) %>%
+  as.matrix()
+
+dist_matrix <- distm(coords, fun = distHaversine) / 1000
+
+rownames(dist_matrix) <- sensor_locations_clean$sensor
+colnames(dist_matrix) <- sensor_locations_clean$sensor
+
+# correlation and distance to long format
+cor_long <- as.data.frame(as.table(cinc_cor_matrix))
+colnames(cor_long) <- c("sensor1", "sensor2", "correlation")
+
+dist_long <- as.data.frame(as.table(dist_matrix))
+colnames(dist_long) <- c("sensor1", "sensor2", "distance_km")
+
+# Join them and remove duplicate pairs
+sensor_compare <- cor_long %>%
+  mutate(
+    sensor1 = as.character(sensor1),
+    sensor2 = as.character(sensor2)
+  ) %>%
+  left_join(dist_long, by = c("sensor1", "sensor2")) %>%
+  filter(sensor1 != sensor2) %>%
+  rowwise() %>%
+  mutate(
+    pair1 = min(sensor1, sensor2),
+    pair2 = max(sensor1, sensor2)
+  ) %>%
+  ungroup() %>%
+  distinct(pair1, pair2, .keep_all = TRUE) %>%
+  filter(!is.na(correlation), !is.na(distance_km))
+
+head(sensor_compare)
+
+# correlation vs distance for CinC daily averages
+ggplot(sensor_compare, aes(x = distance_km, y = correlation)) +
+  geom_point(alpha = 0.35, size = 2) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE, linewidth = 1) +
+  coord_cartesian(ylim = c(0.5, 1.02)) +
+  labs(
+    title = "Correlation vs Distance Between CLEANinCLE Sensors 
+    (Daily PM2.5)",
+    x = "Distance between sensors (km)",
+    y = "Correlation"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank()
+  )
+
+```
+# Pairwise comparison for CLEANinCLE sites (Hourly averages)
+```{r}
+# CinC half-hour data to hourly averages
+
+library(dplyr)
+library(lubridate)
+
+cinc_hourly <- cinc_pm25 %>%
+  mutate(
+    datetime = as.POSIXct(time),
+    hour = floor_date(datetime, "hour")
+  ) %>%
+  group_by(device_number, hour) %>%
+  summarise(
+    pm25_hourly = mean(pm_2.5, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# wide format (one column per sensor)
+library(tidyr)
+
+cinc_hourly_wide <- cinc_hourly %>%
+  pivot_wider(
+    names_from = device_number,
+    values_from = pm25_hourly,
+    names_prefix = "device_"
+  )
+
+# correlation matrix
+cinc_hourly_cor <- cor(
+  cinc_hourly_wide %>% select(-hour),
+  use = "pairwise.complete.obs"
+)
+
+# Convert correlations to long format
+library(reshape2)
+
+cor_long <- as.data.frame(as.table(cinc_hourly_cor))
+colnames(cor_long) <- c("sensor1", "sensor2", "correlation")
+
+# Combine with distance table
+sensor_compare_hourly <- cor_long %>%
+  left_join(dist_long, by = c("sensor1", "sensor2")) %>%
+  filter(sensor1 != sensor2)
+
+# Plot correlation vs distance (hourly)
+library(ggplot2)
+
+ggplot(sensor_compare_hourly, aes(distance_km, correlation)) +
+  geom_point(alpha = 0.35, size = 2) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  coord_cartesian(ylim = c(0.5, 1.02)) +
+  labs(
+    title = "Correlation vs Distance Between CLEANinCLE Sensors (Hourly PM2.5)",
+    x = "Distance between sensors (km)",
+    y = "Correlation"
+  ) +
+  theme_minimal(base_size = 13)
+
+
+```
+
+
+
+# EPA Analysis
+```{r}
+library(RAQSAPI)
+library(purrr)
+library(dplyr)
+
+aqs_credentials(username = "rnl34@case.edu", key = "copperhawk19")
+
+site_numbers <- c("0034", "0038", "0045", "0060", "0065", "0073")
+
+epa_data_list <- map(site_numbers, function(site) {
+  RAQSAPI::aqs_sampledata_by_site(
+    parameter = "88101",
+    bdate = as.Date("20241101", format = "%Y%m%d"),
+    edate = as.Date("20251231", format = "%Y%m%d"),
+    stateFIPS = "39",
+    countycode = "035",
+    sitenum = site,
+    return_header = FALSE
+  ) %>%
+    mutate(site_number = site)
+})
+
+epa_data <- bind_rows(epa_data_list)
+
+head(epa_data)
+dim(epa_data)
+
+# daily averages:
+epa_daily <- epa_data %>%
+  mutate(date = as.Date(date_local)) %>%
+  group_by(site_number, date) %>%
+  summarise(
+    pm25_daily = mean(sample_measurement, na.rm = TRUE),
+    n_obs = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(site_number, date)
+
+head(epa_daily)
+```
+# Convert EPA data to wide format
+```{r}
+library(tidyr)
+
+epa_daily_wide <- epa_daily %>%
+  pivot_wider(
+    names_from = site_number,
+    values_from = pm25_daily,
+    names_prefix = "site_"
+  )
+
+head(epa_daily_wide)
+
+# EPA correlation matrix
+epa_cor_matrix <- cor(
+  epa_daily_wide %>% select(-date),
+  use = "pairwise.complete.obs"
+)
+
+round(epa_cor_matrix, 2)
+
+# EPA correlation heatmap
+library(reshape2)
+library(ggplot2)
+
+epa_cor_long <- melt(epa_cor_matrix)
+
+ggplot(epa_cor_long, aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_viridis_c() +
+  labs(
+    title = "EPA PM2.5 Correlation Between Sites",
+    x = "Site",
+    y = "Site",
+    fill = "Correlation"
+  ) +
+  theme_minimal()
+
+round(epa_cor_matrix, 2)
+
+#
+library(reshape2)
+
+epa_cor_df <- melt(epa_cor_matrix) %>%
+  filter(Var1 != Var2) %>%
+  rename(
+    site1 = Var1,
+    site2 = Var2,
+    correlation = value
+  )
+```
+
+```{r}
+# epa_locations 
+epa_locations <- epa_data %>%
+  mutate(site = paste0("site_", site_number)) %>%
+  select(site, latitude, longitude) %>%
+  distinct() %>%
+  rename(
+    lat = latitude,
+    lon = longitude
+  ) %>%
+  arrange(site)
+
+epa_locations
+
+epa_locations %>%
+  count(site)
+
+epa_locations
+
+```
+# EPA FRM CORRELATION vs. DISTANCE 
+```{r}
+# distances between EPA sites
+library(geosphere)
+
+epa_pairs <- expand.grid(
+  site1 = epa_locations$site,
+  site2 = epa_locations$site
+)
+
+epa_pairs <- epa_pairs %>%
+  left_join(epa_locations, by = c("site1" = "site")) %>%
+  rename(lat1 = lat, lon1 = lon) %>%
+  left_join(epa_locations, by = c("site2" = "site")) %>%
+  rename(lat2 = lat, lon2 = lon) %>%
+  mutate(
+    distance_km = distHaversine(
+      cbind(lon1, lat1),
+      cbind(lon2, lat2)
+    ) / 1000
+  )
+
+head(epa_pairs)
+
+# merge with correlations
+epa_compare <- epa_cor_df %>%
+  left_join(
+    epa_pairs,
+    by = c("site1", "site2")
+  )
+
+# EPA correlation vs distance
+epa_compare <- epa_compare %>%
+  filter(!is.na(correlation), !is.na(distance_km))
+
+ggplot(epa_compare, aes(distance_km, correlation)) +
+  geom_point(size = 3) +
+  geom_smooth(method = "lm", color = "blue") +
+  labs(
+    title = "EPA FRM PM2.5 Correlation vs Distance",
+    x = "Distance between EPA sites (km)",
+    y = "Correlation"
+  ) +
+  coord_cartesian(ylim = c(0.80, 1.00)) +
+  theme_minimal()
+```
+
+# FRM filter data (24-hour reference measurements)
+```{r}
+epa_frm_24hr <- epa_data %>%
+  filter(
+    method_type == "FRM",
+    sample_duration == "24 HOUR"
+  )
+
+head(epa_frm_24hr)
+```
+
+
+# FEM optical daily averages
+```{r}
+epa_fem_24hr <- epa_data %>%
+  filter(
+    method_type == "FEM",
+    sample_duration == "24 HOUR"
+  )
+
+epa_data %>%
+  count(method_type, sample_duration)
+```
+
+```{r}
+
+# EPA hourly dataset
+epa_fem_hourly <- epa_data %>%
+  filter(method_type == "FEM", sample_duration == "1 HOUR")
+
+# daily averages from hourly FEM
+epa_fem_daily <- epa_fem_hourly %>%
+  mutate(date = as.Date(date_local)) %>%
+  group_by(site_number, date) %>%
+  summarise(
+    fem_pm25_daily = mean(sample_measurement, na.rm = TRUE),
+    n_obs = n(),
+    .groups = "drop"
+  )
+
+# FRM filter dataset
+epa_frm_daily <- epa_data %>%
+  filter(method_type == "FRM", sample_duration == "24 HOUR") %>%
+  mutate(date = as.Date(date_local)) %>%
+  select(site_number, date, sample_measurement) %>%
+  rename(pm25_filter = sample_measurement)
+
+# EPA optical vs filter (Merge them by site and date)
+epa_compare <- inner_join(
+  epa_frm_daily,
+  epa_fem_daily,
+  by = c("site_number", "date")
+)
+
+head(epa_compare)
+
+ggplot(epa_compare,
+       aes(pm25_filter, fem_pm25_daily)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "blue") +
+  labs(
+    title = "EPA Optical vs Filter PM2.5",
+    x = "Filter (FRM) PM2.5",
+    y = "Optical (FEM) PM2.5"
+  ) +
+  theme_minimal()
+```
+
+
+```{r figA-plot, fig.width=12, fig.height=9}
+library(dplyr)
+library(ggplot2)
+library(scales)
+
+# Build plotting table
+figA_table <- epa_compare %>%
+  filter(!is.na(pm25_filter), !is.na(pm25_daily)) %>%
+  mutate(Site = site_number) %>%
+  select(
+    Site,
+    PM25_FRM = pm25_filter,
+    PM25_FEM = pm25_daily
+  )
+
+# Fixed panel limits to match template style
+panel_min <- 0
+panel_max <- 50
+lims <- c(panel_min, panel_max)
+
+# Per-site regression labels
+lab_tbl <- figA_table %>%
+  group_by(Site) %>%
+  summarise(
+    n = n(),
+    slope = if (n() > 2) coef(lm(PM25_FEM ~ PM25_FRM))[2] else NA_real_,
+    intercept = if (n() > 2) coef(lm(PM25_FEM ~ PM25_FRM))[1] else NA_real_,
+    r2 = if (n() > 2) summary(lm(PM25_FEM ~ PM25_FRM))$r.squared else NA_real_,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    label = ifelse(
+      is.finite(r2),
+      sprintf("y = %.2fx %+ .2f\nR² = %.2f", slope, intercept, r2),
+      "n < 3"
+    ),
+    x = panel_min + (panel_max - panel_min) * 0.04,
+    y = panel_max - (panel_max - panel_min) * 0.07
+  )
+
+ggplot(figA_table, aes(PM25_FRM, PM25_FEM)) +
+  geom_point(alpha = 0.9, size = 2) +
+  geom_smooth(method = "lm", se = FALSE, linewidth = 0.9, color = "steelblue") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray40") +
+  coord_equal(xlim = lims, ylim = lims, expand = FALSE) +
+  facet_wrap(~Site, ncol = 3) +
+  geom_text(
+    data = lab_tbl,
+    aes(x = x, y = y, label = label),
+    inherit.aes = FALSE,
+    hjust = 0,
+    vjust = 1,
+    size = 4
+  ) +
+  labs(
+    title = "EPA Continuous (FEM daily avg) vs EPA FRM (24hr) — by site",
+    x = "EPA FRM PM2.5 (µg/m³)",
+    y = "EPA Continuous PM2.5 (µg/m³)"
+  ) +
+  scale_x_continuous(breaks = seq(0, 50, 5)) +
+  scale_y_continuous(breaks = seq(0, 50, 5)) +
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.spacing = unit(1.5, "lines"),
+    axis.title = element_text(face = "bold"),
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    strip.text = element_text(face = "bold", size = 14),
+    panel.grid.minor = element_blank()
+  )
+
+```
+
+# Compare CinC vs EPA (Filter / FRM)
+```{r cinc_epa_frm_comparison, fig.width=10, fig.height=7, echo=FALSE}
+# Identify the nearest CinC sensor to each EPA site
+library(dplyr)
+library(geosphere)
+
+# EPA coordinates
+epa_coords <- epa_locations %>%
+  select(site, lat, lon)
+
+# CinC coordinates
+cinc_coords <- sensor_locations_clean %>%
+  select(device_number, latitude, longitude)
+
+# Find nearest CinC sensor for each EPA site
+epa_cinc_pairs <- epa_coords %>%
+  rowwise() %>%
+  mutate(
+    nearest_device = cinc_coords$device_number[
+      which.min(
+        distHaversine(
+          c(lon, lat),
+          as.matrix(cinc_coords[, c("longitude", "latitude")])
+        )
+      )
+    ]
+  ) %>%
+  ungroup()
+
+epa_cinc_pairs
+
+# EPA daily filter data
+epa_filter_daily <- epa_compare %>%
+  select(date, site_number, pm25_filter) %>%
+  distinct()
+
+# CinC daily averages
+cinc_daily <- cinc_pm25 %>%
+  mutate(date = as.Date(time)) %>%
+  group_by(device_number, date) %>%
+  summarise(
+    pm25_cinc = mean(pm_2.5, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# EPA–CinC pairing table 
+# Rename since epa_cinc_pairs currently uses site, while epa_filter_daily uses site_number
+library(dplyr)
+
+epa_cinc_pairs2 <- epa_cinc_pairs2 %>%
+  mutate(site_number = sub("^site_", "", site_number))
+
+epa_filter_daily <- epa_filter_daily %>%
+  mutate(site_number = as.character(site_number))
+
+cinc_daily <- cinc_daily %>%
+  mutate(device_number = as.character(device_number))
+
+# EPA filter data with nearest CinC daily data
+epa_cinc_compare <- epa_cinc_pairs2 %>%
+  left_join(epa_filter_daily, by = "site_number") %>%
+  left_join(
+    cinc_daily,
+    by = c("nearest_device" = "device_number", "date" = "date")
+  )
+
+epa_cinc_compare_plot <- epa_cinc_compare %>%
+  filter(!is.na(pm25_filter), !is.na(pm25_cinc))
+
+#Check
+head(epa_cinc_compare)
+
+# Plot CinC vs EPA filter by site
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+
+# Build plotting table
+figB_table <- epa_cinc_compare %>%
+  filter(!is.na(pm25_filter), !is.na(pm25_cinc)) %>%
+  mutate(Site = site_number) %>%
+  select(
+    Site,
+    EPA_FRM = pm25_filter,
+    CINC_PM25 = pm25_cinc
+  ) %>%
+  left_join(
+    epa_cinc_pairs2 %>%
+      mutate(site_number = sub("^site_", "", site_number)),
+    by = c("Site" = "site_number")
+  )
+
+# Common axis limits
+panel_min <- 0
+panel_max <- 45
+lims <- c(panel_min, panel_max)
+
+# Function to make one panel exactly in template style
+make_panel <- function(site_id) {
+  
+  df <- figB_table %>%
+    filter(Site == site_id)
+  
+  dev_id <- unique(df$nearest_device)[1]
+  
+  fit <- lm(CINC_PM25 ~ EPA_FRM, data = df)
+  slope <- coef(fit)[2]
+  intercept <- coef(fit)[1]
+  r2 <- summary(fit)$r.squared
+  
+  eq_label <- sprintf("y = %.2fx %+ .2f\nR² = %.2f", slope, intercept, r2)
+  
+  ggplot(df, aes(x = EPA_FRM, y = CINC_PM25)) +
+    geom_point(alpha = 0.8, size = 1.9) +
+    geom_smooth(method = "lm", se = FALSE, linewidth = 1.0, color = "steelblue") +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray40") +
+    annotate(
+      "text",
+      x = panel_min + (panel_max - panel_min) * 0.04,
+      y = panel_max - (panel_max - panel_min) * 0.07,
+      label = eq_label,
+      hjust = 0,
+      vjust = 1,
+      size = 4
+    ) +
+    coord_equal(xlim = lims, ylim = lims, expand = FALSE) +
+    labs(
+      title = paste0(site_id),
+      x = paste0("Site ", site_id, " (µg/m³)"),
+      y = paste0("Device ", dev_id, " (µg/m³)")
+    ) +
+    scale_x_continuous(breaks = seq(0, 45, 10)) +
+    scale_y_continuous(breaks = seq(0, 45, 10)) +
+    theme_minimal(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5, size = 13),
+      axis.title = element_text(size = 11),
+      axis.text = element_text(size = 10, color = "black"),
+      panel.grid.minor = element_blank()
+    )
+}
+
+# Build all six panels
+p1 <- make_panel("0034")
+p2 <- make_panel("0038")
+p3 <- make_panel("0045")
+p4 <- make_panel("0060")
+p5 <- make_panel("0065")
+p6 <- make_panel("0073")
+
+# Combine like the template
+(p1 + p2 + p3) / (p4 + p5 + p6) +
+  plot_annotation(
+    title = "CLEANinCLE vs EPA FRM PM2.5 - by Site",
+    theme = theme(
+      plot.title = element_text(face = "bold", hjust = 0.5, size = 16)
+    )
+  )
+```
+
+# CLEANinCLE vs EPA optical (daily averages)
+```{r fig_cinc_vs_epa_optical, fig.width=11, fig.height=7}
+# EPA optical daily data
+epa_optical_daily <- epa_fem_daily %>%
+  select(date, site_number, pm25_daily) %>%
+  rename(pm25_epa_optical = pm25_daily) %>%
+  mutate(site_number = as.character(site_number))
+
+epa_cinc_pairs2 <- epa_cinc_pairs2 %>%
+  mutate(site_number = sub("^site_", "", site_number))
+
+# EPA optical with CinC daily
+epa_cinc_optical_compare <- epa_cinc_pairs2 %>%
+  left_join(epa_optical_daily, by = "site_number") %>%
+  left_join(
+    cinc_daily %>% mutate(device_number = as.character(device_number)),
+    by = c("nearest_device" = "device_number", "date" = "date")
+  )
+
+# Filter matched rows
+epa_cinc_optical_plot <- epa_cinc_optical_compare %>%
+  filter(!is.na(pm25_epa_optical), !is.na(pm25_cinc))
+
+# Plot
+figC_table <- epa_cinc_optical_compare %>%
+  filter(!is.na(pm25_epa_optical), !is.na(pm25_cinc)) %>%
+  mutate(Site = site_number) %>%
+  select(
+    Site,
+    EPA_OPTICAL = pm25_epa_optical,
+    CINC_PM25 = pm25_cinc
+  ) %>%
+  left_join(
+    epa_cinc_pairs2 %>%
+      mutate(site_number = sub("^site_", "", site_number)),
+    by = c("Site" = "site_number")
+  )
+
+# same style as your FRM plot
+make_panel_optical <- function(site_id) {
+
+  df <- figC_table %>%
+    filter(Site == site_id)
+
+  dev_id <- unique(df$nearest_device)[1]
+
+  fit <- lm(CINC_PM25 ~ EPA_OPTICAL, data = df)
+
+  slope <- coef(fit)[2]
+  intercept <- coef(fit)[1]
+  r2 <- summary(fit)$r.squared
+
+  eq_label <- sprintf("y = %.2fx %+ .2f\nR² = %.2f", slope, intercept, r2)
+
+  ggplot(df, aes(EPA_OPTICAL, CINC_PM25)) +
+    geom_point(alpha = 0.8, size = 1.9) +
+    geom_smooth(method = "lm", se = FALSE, linewidth = 1.0, color = "steelblue") +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray40") +
+    annotate(
+      "text",
+      x = min(df$EPA_OPTICAL) + 0.5,
+      y = max(df$CINC_PM25) * 0.95,
+      label = eq_label,
+      hjust = 0,
+      vjust = 1,
+      size = 4
+    ) +
+    labs(
+      title = site_id,
+      x = paste0("Site ", site_id, " (µg/m³)"),
+      y = paste0("Device ", dev_id, " (µg/m³)")
+    ) +
+    scale_x_continuous(breaks = scales::pretty_breaks(5)) +
+    scale_y_continuous(breaks = scales::pretty_breaks(5)) +
+    theme_minimal(base_size = 14) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      panel.grid.minor = element_blank()
+    )
+}
+p1 <- make_panel_optical("0034")
+p2 <- make_panel_optical("0038")
+p3 <- make_panel_optical("0045")
+p4 <- make_panel_optical("0060")
+p5 <- make_panel_optical("0065")
+p6 <- make_panel_optical("0073")
+
+(p1 + p2 + p3) / (p4 + p5 + p6) +
+  plot_annotation(
+    title = "CLEANinCLE vs EPA Optical PM2.5 - by Site",
+    theme = theme(
+      plot.title = element_text(face = "bold", hjust = 0.5, size = 16)
+    )
+  )
+```
+
+
+```{r fig_epa_optical_vs_frm, fig.width=11, fig.height=7}
+figD_table <- epa_compare %>%
+  filter(!is.na(pm25_filter), !is.na(pm25_daily)) %>%
+  mutate(Site = site_number) %>%
+  select(
+    Site,
+    EPA_FRM = pm25_filter,
+    EPA_OPTICAL = pm25_daily
+  )
+
+make_panel_epa <- function(site_id) {
+
+  df <- figD_table %>%
+    filter(Site == site_id)
+
+  fit <- lm(EPA_OPTICAL ~ EPA_FRM, data = df)
+
+  slope <- coef(fit)[2]
+  intercept <- coef(fit)[1]
+  r2 <- summary(fit)$r.squared
+
+  eq_label <- sprintf("y = %.2fx %+ .2f\nR² = %.2f", slope, intercept, r2)
+
+  ggplot(df, aes(EPA_FRM, EPA_OPTICAL)) +
+    geom_point(alpha = 0.8, size = 1.9) +
+    geom_smooth(method = "lm", se = FALSE, linewidth = 1.0, color = "steelblue") +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray40") +
+    annotate(
+      "text",
+      x = min(df$EPA_FRM) + 0.5,
+      y = max(df$EPA_OPTICAL) * 0.95,
+      label = eq_label,
+      hjust = 0,
+      vjust = 1,
+      size = 4
+    ) +
+    labs(
+      title = site_id,
+      x = paste0("EPA FRM — Site ", site_id, " (µg/m³)"),
+      y = paste0("EPA Optical — Site ", site_id, " (µg/m³)")
+    ) +
+    scale_x_continuous(breaks = scales::pretty_breaks(5)) +
+    scale_y_continuous(breaks = scales::pretty_breaks(5)) +
+    theme_minimal(base_size = 14) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      panel.grid.minor = element_blank()
+    )
+}
+
+(p1 + p2 + p3) / (p4 + p5 + p6) +
+  plot_annotation(
+    title = "EPA Optical vs EPA FRM PM2.5 — by Site",
+    theme = theme(
+      plot.title = element_text(face = "bold", hjust = 0.5, size = 16)
+    )
+  )
+
+```
+
+```{r}
+# EPA optical daily table
+epa_optical_daily_wide <- epa_fem_daily %>%
+  mutate(site = paste0("site_", site_number)) %>%
+  select(date, site, pm25_daily) %>%
+  pivot_wider(
+    names_from = site,
+    values_from = pm25_daily
+  )
+
+#Correlation matrix
+epa_optical_cor_matrix <- cor(
+  epa_optical_daily_wide %>% select(-date),
+  use = "pairwise.complete.obs"
+)
+
+library(reshape2)
+library(ggplot2)
+
+epa_optical_cor_long <- melt(epa_optical_cor_matrix)
+
+ggplot(epa_optical_cor_long, aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_viridis_c(name = "Correlation") +
+  labs(
+    title = "Correlation Between EPA Optical Sites (Daily PM2.5)",
+    x = "EPA Optical Site",
+    y = "EPA Optical Site"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank()
+  )
+
+```
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
