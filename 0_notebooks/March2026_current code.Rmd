@@ -70,9 +70,7 @@ saveRDS(df_raw, "CLEANinCLE_raw_2024-11_to_2025-12.rds")
 message("Download complete.")
 dim(df_raw)
 names(df_raw)
-
 ```
-
 
 # PM2.5-only CLEANinCLE dataset
 ```{r}
@@ -111,7 +109,290 @@ head(cinc_pm25)
 range(cinc_pm25$time, na.rm = TRUE)
 ```
 
-# Exploratory Data Analysis - Sensors in the dataset
+# CinC provide a unique device name for each site
+```{r}
+library(dplyr)
+library(lubridate)
+
+cinc_sites <- cinc_pm25 %>%
+  mutate(
+    latitude = as.numeric(latitude),
+    longitude = as.numeric(longitude),
+    datetime = as.POSIXct(time),
+    lat_round = round(latitude, 5),
+    lon_round = round(longitude, 5)
+  ) %>%
+  filter(
+    !is.na(lat_round),
+    !is.na(lon_round),
+    lat_round != 0,
+    lon_round != 0
+  ) %>%
+  arrange(device_number, datetime) %>%
+  group_by(device_number) %>%
+  mutate(
+    loc_change = (lat_round != lag(lat_round, default = first(lat_round))) |
+                 (lon_round != lag(lon_round, default = first(lon_round))),
+    site_number = cumsum(loc_change) + 1,
+    Site_ID = paste0(device_number, ".", site_number)
+  ) %>%
+  ungroup() %>%
+  select(-loc_change, -site_number, -lat_round, -lon_round)
+
+cinc_unique_site_table <- cinc_sites %>%
+  group_by(Site_ID, device_number, location_name) %>%
+  summarise(
+    latitude = first(latitude),
+    longitude = first(longitude),
+    start_time = min(datetime, na.rm = TRUE),
+    end_time = max(datetime, na.rm = TRUE),
+    n_obs = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(device_number, start_time)
+
+cinc_unique_site_table
+
+write_csv(cinc_unique_site_table, "CLEANinCLE_unique_site_table.csv")
+saveRDS(cinc_unique_site_table, "CLEANinCLE_unique_site_table.rds")
+```
+
+
+## Updated CinC Time Series Plot 0f PM2.5 for all devices
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# get all unique site IDs
+site_ids <- sort(unique(cinc_sites$Site_ID))
+
+# create folder to save plots
+dir.create("CinC_PM25_timeseries_plots", showWarnings = FALSE)
+
+for (site in site_ids) {
+  
+  sensor_data <- cinc_sites %>% filter(Site_ID == site)
+  
+  dev <- unique(sensor_data$device_number)[1]
+  loc_name <- unique(sensor_data$location_name)[1]
+  
+  p <- ggplot(sensor_data, aes(datetime, pm_2.5)) +
+    geom_point(alpha = 0.4, size = 0.7) +
+    scale_x_datetime(
+      limits = as.POSIXct(c("2024-11-01", "2025-12-31")),
+      date_breaks = "1 month",
+      date_labels = "%b %Y"
+    ) +
+    labs(
+      title = paste("PM2.5 Time Series - Site", site, "(Device", dev, "-", loc_name, ")"),
+      x = "Time",
+      y = "PM2.5 (µg/m³)"
+    ) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  print(p)
+  
+  ggsave(
+    filename = paste0("CinC_PM25_timeseries_plots/CinC_site_", site, ".png"),
+    plot = p,
+    width = 10,
+    height = 5,
+    dpi = 300
+  )
+}
+
+
+```
+
+# CLEANinCLE Daily Sensor Coverage
+```{r}
+# Expand each site into daily dates
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(ggplot2)
+
+coverage_daily <- cinc_unique_site_table %>%
+  mutate(
+    start_date = as.Date(start_time),
+    end_date   = as.Date(end_time)
+  ) %>%
+  rowwise() %>%
+  mutate(date = list(seq.Date(start_date, end_date, by = "day"))) %>%
+  ungroup() %>%
+  unnest(date)
+
+
+coverage_daily <- coverage_daily %>%
+  mutate(
+    device = as.numeric(sub("\\..*", "", Site_ID)),
+    deploy = as.numeric(sub(".*\\.", "", Site_ID))
+  ) %>%
+  arrange(device, deploy) %>%
+  mutate(
+    Site_ID = factor(Site_ID, levels = rev(unique(Site_ID)))
+  )
+
+# Plot the daily coverage
+ggplot(coverage_daily, aes(x = date, y = Site_ID)) +
+  geom_line(linewidth = 0.5) +
+  labs(
+    title = "CLEANinCLE Daily Sensor Coverage",
+    x = "Date",
+    y = "Site (Device.Location)"
+  ) +
+  scale_x_date(
+    limits = c(as.Date("2024-11-01"), as.Date("2025-12-31")),
+    date_breaks = "1 months",
+    date_labels = "%b %Y"
+  ) +
+  scale_y_discrete(expand = expansion(mult = c(0.01, 0.02))) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 6),
+    panel.grid.major.y = element_blank(), 
+    panel.grid.minor = element_blank()
+  )
+
+ggsave("CinC_daily_coverage.png",
+       width = 10,
+       height = 14,   
+       dpi = 300)
+```
+```{r}
+ggplot(coverage_daily, aes(x = date, y = Site_ID)) +
+  geom_line(linewidth = 0.5) +
+  labs(
+    title = "CLEANinCLE Sensor Deployment Timeline",
+    x = "Date",
+    y = "Site (Device.Location)"
+  ) +
+  scale_x_date(
+    limits = c(as.Date("2024-11-01"), as.Date("2025-12-31")),
+    date_breaks = "2 months",
+    date_labels = "%b %Y"
+  ) +
+  scale_y_discrete(expand = expansion(mult = c(0.01, 0.02))) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 6),
+    panel.grid.major.y = element_blank(),   # 👈 key
+    panel.grid.minor = element_blank()
+  )
+
+ggsave("CinC_sensor_coverage.png",
+       width = 10,
+       height = 14,   
+       dpi = 300)
+```
+
+```{r}
+library(dplyr)
+
+site_lookup_clean <- site_lookup %>%
+  select(1, 5) %>%
+  rename(
+    sensor_id = 1,
+    site_id = 2
+  ) %>%
+  mutate(
+    sensor_id = as.character(sensor_id),
+    site_id = as.character(site_id)
+  ) %>%
+  filter(
+    grepl("^[0-9]+\\.[0-9]+$", sensor_id),
+    !is.na(site_id),
+    site_id != "",
+    !grepl("exclude", site_id, ignore.case = TRUE),
+    !grepl("combined", site_id, ignore.case = TRUE)
+  )
+
+head(site_lookup_clean)
+distinct(site_lookup_clean)
+
+
+library(dplyr)
+
+cinc_site_table_full <- cinc_sites %>%
+  mutate(sensor_id = as.character(Site_ID)) %>%
+  left_join(site_lookup_clean, by = "sensor_id") %>%
+  filter(!is.na(site_id)) %>%
+  mutate(
+    latitude = as.numeric(latitude),
+    longitude = as.numeric(longitude),
+    date = as.Date(datetime),
+    time_only = format(datetime, "%H:%M:%S"),
+    pm25 = pm_2.5
+  ) %>%
+  select(
+    sensor_id,
+    site_id,
+    latitude,
+    longitude,
+    date,
+    time = time_only,
+    pm25
+  ) %>%
+  arrange(latitude, longitude, date, time)
+
+head(cinc_site_table_full)
+distinct(cinc_site_table_full, sensor_id, site_id)
+nrow(cinc_site_table_full)
+
+```
+
+```{r}
+cinc_daily_site <- cinc_site_table_full %>%
+  group_by(site_id, date) %>%
+  summarise(
+    pm25_daily = mean(pm25, na.rm = TRUE),
+    n_obs = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(site_id, date)
+
+head(cinc_daily_site)
+
+cinc_daily_site %>%
+  count(site_id, name = "n_days") %>%
+  arrange(desc(n_days))
+
+```
+```{r}
+cinc_site_table_full <- cinc_site_table_full %>%
+  arrange(site_id, sensor_id, date, time)
+
+library(ggplot2)
+
+ggplot(cinc_site_table_full, aes(x = date, y = sensor_id)) +
+  geom_point(size = 0.5, alpha = 0.6) +
+  labs(
+    title = "CinC Sensor Data Coverage",
+    x = "Date",
+    y = "Sensor ID"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 8)
+  )
+
+ggplot(cinc_site_table_full, aes(x = date, y = site_id)) +
+  geom_point(size = 0.5, alpha = 0.6) +
+  labs(
+    title = "CinC Coverage by Combined Site",
+    x = "Date",
+    y = "Site ID"
+  ) +
+  theme_minimal()
+```
+
+
+# CinC Exploratory Data Analysis 
 ```{r}
 # CinC devices present
 cinc_pm25 %>%
@@ -183,8 +464,8 @@ ggplot(
 cinc_pm25 %>%
   filter(device_number == unique(device_number)[1]) %>%
   count(month = lubridate::floor_date(time, "month"))
-
 ```
+# CinC Time Series Plot 0f PM2.5 for all devices
 ```{r}
 library(ggplot2)
 library(dplyr)
@@ -225,8 +506,340 @@ for (dev in device_ids) {
     dpi = 300
   )
 }
+```
+
+# Cleaning bad sites / bad periods
+```{r}
+#clean dataset
+cinc_clean <- cinc_site_table_full
+cinc_removed <- tibble()
+
+# Remove obvious bad values (>250)
+bad_high <- cinc_clean %>%
+  filter(pm25 > 250)
+
+cinc_removed <- bind_rows(cinc_removed, bad_high)
+
+cinc_clean2 <- cinc_clean %>%
+  filter(pm25 <= 250)
+
+# Remove site 6.1 completely
+bad_6 <- cinc_clean %>% filter(site_id == "6.1")
+
+cinc_removed <- bind_rows(cinc_removed, bad_6)
+
+cinc_clean3 <- cinc_clean2 %>% filter(site_id != "6.1")
+
+# Trim 18.2 (late May onward)
+bad_18 <- cinc_clean %>%
+  filter(site_id == "18.2" & date >= as.Date("2025-05-20"))
+
+cinc_removed <- bind_rows(cinc_removed, bad_18)
+
+cinc_clean4 <- cinc_clean3 %>%
+  filter(!(site_id == "18.2" & date >= as.Date("2025-05-20")))
+
+# Trim 27.1 (late period)
+bad_27 <- cinc_clean %>%
+  filter(site_id == "27.1" & date >= as.Date("2025-07-01"))
+
+cinc_removed <- bind_rows(cinc_removed, bad_27)
+
+cinc_clean5 <- cinc_clean4 %>%
+  filter(!(site_id == "27.1" & date >= as.Date("2025-07-01")))
+
+# Remove 27.3
+bad_273 <- cinc_clean %>% filter(site_id == "27.3")
+
+cinc_removed <- bind_rows(cinc_removed, bad_273)
+
+cinc_clean6 <- cinc_clean5 %>% filter(site_id != "27.3")
+
+# Trim 13.1 (late Sept)
+bad_13 <- cinc_clean %>%
+  filter(site_id == "13.1" & date >= as.Date("2025-09-20"))
+
+cinc_removed <- bind_rows(cinc_removed, bad_13)
+
+cinc_clean <- cinc_clean %>%
+  filter(!(site_id == "13.1" & date >= as.Date("2025-09-20")))
+
+distinct(cinc_clean, site_id)
+cinc_removed %>% count(site_id)
+```
+
+# CLEANinCLE site-to-site matrix plot 
+```{r}
+#
+cinc_daily <- cinc_clean %>%
+  group_by(site_id, date) %>%
+  summarise(pm25 = mean(pm25, na.rm = TRUE), .groups = "drop")
+
+# Convert to wide format
+library(tidyr)
+
+cinc_wide <- cinc_daily %>%
+  pivot_wider(
+    names_from = site_id,
+    values_from = pm25
+  )
+
+# check
+names(cinc_wide)
+
+site_order <- c(
+  "1.1","2.1","3.1","5.1_19.3_24.2","7.1_4.1","7.2","8.1_34.2",
+  "9.1_17.2","9.2",
+  "11.1_32.1_18.2","12.1_5.2","13.1_33.2","14.1","15.1",
+  "18.1_26.1","19.1","19.2","20.1","20.2","21.1","22.1","23.1",
+  "24.1_1.2","25.1","27.1","28.1","29.1","30.1_17.1","31.2",
+  "32.2","33.1","34.1_16.1","35.1","35.2"
+)
+
+
+
+valid_sites <- intersect(site_order, names(cinc_wide))
+
+cinc_wide <- cinc_wide %>%
+  select(date, all_of(valid_sites))
+names(cinc_wide)
+```
+```{r}
+# choose the sites you want to compare
+sites_use <- valid_sites
+
+# optional: if you want to test with fewer first, use something like:
+# sites_use <- c("1.1","2.1","3.1","9.2","14.1","27.1")
+
+df_matrix <- cinc_wide %>%
+  select(date, all_of(sites_use))
+
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+
+axis_min <- 0
+axis_max <- ceiling(max(unlist(df_matrix[sites_use]), na.rm = TRUE) / 5) * 5
+
+plot_matrix <- vector("list", length(sites_use) * length(sites_use))
+
+for (i in seq_along(sites_use)) {
+  for (j in seq_along(sites_use)) {
+    
+    x_site <- sites_use[j]
+    y_site <- sites_use[i]
+    index <- (i - 1) * length(sites_use) + j
+    
+    df_pair <- df_matrix %>%
+      select(x = all_of(x_site), y = all_of(y_site)) %>%
+      filter(!is.na(x) & !is.na(y))
+    
+    if (nrow(df_pair) < 10) {
+      p <- ggplot() +
+        annotate("text", x = 0.5, y = 0.5, label = "No overlap", size = 4) +
+        theme_void()
+    } else {
+      
+      fit <- lm(y ~ x, data = df_pair)
+      r2 <- summary(fit)$r.squared
+      slope <- coef(fit)[2]
+      intercept <- coef(fit)[1]
+      
+      label_text <- paste0(
+        "y = ", round(slope, 2), "x + ", round(intercept, 2),
+        "\nR² = ", round(r2, 2)
+      )
+      
+      p <- ggplot(df_pair, aes(x = x, y = y)) +
+        geom_point(size = 0.8, alpha = 0.6, color = "darkgreen") +
+        geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
+        geom_smooth(method = "lm", se = FALSE, color = "steelblue", linewidth = 0.5) +
+        coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
+        annotate(
+          "text",
+          x = axis_min + 0.05 * (axis_max - axis_min),
+          y = axis_max - 0.05 * (axis_max - axis_min),
+          label = label_text,
+          hjust = 0, vjust = 1,
+          size = 2.5
+        ) +
+        labs(
+          x = paste("Site", x_site),
+          y = paste("Site", y_site)
+        ) +
+        theme_minimal(base_size = 8) +
+        theme(
+          axis.title = element_text(size = 7),
+          axis.text = element_text(size = 6),
+          panel.grid.minor = element_blank(),
+          plot.margin = margin(2, 2, 2, 2)
+        )
+    }
+    
+    plot_matrix[[index]] <- p
+  }
+}
+
+grid_plot <- grid.arrange(
+  grobs = plot_matrix,
+  ncol = length(sites_use),
+  nrow = length(sites_use),
+  top = "CinC Site-to-Site Matrix Plot (Daily PM2.5)"
+)
+
+print(grid_plot)
+```
+
+
+```{r}
+
+site_lookup_clean <- site_lookup_clean %>%
+  filter(sensor_id != "27.1") %>%
+  bind_rows(
+    tibble(sensor_id = "27.1", site_id = "27.1"),
+    tibble(sensor_id = "9.2",  site_id = "9.2")
+  )
+
+cinc_site_table_full <- cinc_sites %>%
+  mutate(sensor_id = as.character(Site_ID)) %>%
+  left_join(site_lookup_clean, by = "sensor_id") %>%
+  filter(!is.na(site_id)) %>%
+  mutate(
+    latitude = as.numeric(latitude),
+    longitude = as.numeric(longitude),
+    date = as.Date(datetime),
+    time_only = format(datetime, "%H:%M:%S"),
+    pm25 = pm_2.5
+  ) %>%
+  select(
+    sensor_id,
+    site_id,
+    latitude,
+    longitude,
+    date,
+    time = time_only,
+    pm25
+  ) %>%
+  arrange(latitude, longitude, date, time)
+
+site_order <- c(
+  "1.1","2.1","3.1","5.1_19.3_24.2","7.1_4.1","7.2","8.1_34.2",
+  "9.1_17.2","9.2","11.1_32.1_18.2","12.1_5.2","13.1_33.2","14.1","15.1",
+  "18.1_26.1","19.1","19.2","20.1","20.2","21.1","22.1","23.1",
+  "24.1_1.2","25.1","27.1","28.1","29.1","30.1_17.1","31.2",
+  "32.2","33.1","34.1_16.1","35.1","35.2"
+)
+
+coverage_site_sensor <- coverage_site_sensor %>%
+  filter(site_id %in% site_order) %>%
+  mutate(site_id = factor(site_id, levels = rev(site_order)))
+
+distinct(cinc_site_table_full, site_id)
 
 ```
+
+# CinC Sensor Data Coverage by Site ID
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tibble)
+
+# 1. Fix lookup so 27.1 and 9.2 are separate
+site_lookup_clean <- site_lookup_clean %>%
+  filter(!(sensor_id %in% c("27.1", "9.2") | site_id == "27.1_9.2")) %>%
+  bind_rows(
+    tibble(sensor_id = "27.1", site_id = "27.1"),
+    tibble(sensor_id = "9.2",  site_id = "9.2")
+  ) %>%
+  filter(grepl("^[0-9]+\\.[0-9]+(_[0-9]+\\.[0-9]+)*$", site_id))
+
+site_lookup_clean <- site_lookup_clean %>%
+  filter(site_id != "22.1") %>%
+  bind_rows(
+    tibble(sensor_id = "22.1", site_id = "22.1")
+  )
+
+# 2. Rebuild full table from corrected lookup
+cinc_site_table_full <- cinc_sites %>%
+  mutate(sensor_id = as.character(Site_ID)) %>%
+  left_join(site_lookup_clean, by = "sensor_id") %>%
+  filter(!is.na(site_id)) %>%
+  mutate(
+    latitude = as.numeric(latitude),
+    longitude = as.numeric(longitude),
+    date = as.Date(datetime),
+    time_only = format(datetime, "%H:%M:%S"),
+    pm25 = pm_2.5
+  ) %>%
+  select(
+    sensor_id,
+    site_id,
+    latitude,
+    longitude,
+    date,
+    time = time_only,
+    pm25
+  ) %>%
+  arrange(latitude, longitude, date, time)
+
+# 3. Confirm 27.1 and 9.2 now exist separately
+distinct(cinc_site_table_full, sensor_id, site_id) %>%
+  filter(sensor_id %in% c("27.1", "9.2")) %>%
+  print(n = Inf)
+distinct(cinc_site_table_full, sensor_id, site_id) %>%
+  filter(site_id == "22.1") %>%
+  print(n = Inf)
+
+# 4. Daily coverage table
+coverage_site_sensor <- cinc_site_table_full %>%
+  group_by(site_id, sensor_id, date) %>%
+  summarise(.groups = "drop")
+
+# 5. Ordered from lowest to highest
+site_order <- c(
+  "1.1","2.1","3.1","5.1_19.3_24.2","7.1_4.1","7.2","8.1_34.2",
+  "9.1_17.2","9.2",
+  "11.1_32.1_18.2","12.1_5.2","13.1_33.2","14.1","15.1",
+  "18.1_26.1","19.1","19.2","20.1","20.2","21.1","22.1","23.1",
+  "24.1_1.2","25.1","27.1","28.1","29.1","30.1_17.1","31.2",
+  "32.2","33.1","34.1_16.1","35.1","35.2"
+)
+
+# keep only site IDs that actually exist
+valid_sites <- intersect(site_order, unique(coverage_site_sensor$site_id))
+
+coverage_site_sensor <- coverage_site_sensor %>%
+  filter(site_id %in% valid_sites) %>%
+  mutate(site_id = factor(site_id, levels = rev(valid_sites)))
+
+# 6. Plot with dots so you can see real daily coverage
+ggplot(coverage_site_sensor, aes(x = date, y = site_id)) +
+  geom_point(size = 0.45, color = "black") +
+  labs(
+    title = "CinC Sensor Data Coverage by Site ID",
+    x = "Date",
+    y = "Site ID"
+  ) +
+  scale_x_date(
+    limits = c(as.Date("2024-11-01"), as.Date("2025-12-31")),
+    date_breaks = "1 month",
+    date_labels = "%b %Y"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 7),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+cinc_site_table <- cinc_site_table_full
+
+write.csv(cinc_site_table, "cinc_site_table.csv", row.names = FALSE)
+```
+
+
 
 ```{r}
 # Sensor coverage summary (start, end, number of observations)
@@ -278,6 +891,7 @@ cinc_pm25 %>%
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
+
 # Daily PM2.5 datasets
 ```{r}
 cinc_daily <- cinc_pm25 %>%
@@ -338,7 +952,6 @@ ggplot(cor_long, aes(Sensor1, Sensor2, fill = correlation)) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ```
-
 
 ```{r}
 library(pheatmap)
@@ -417,6 +1030,230 @@ ggplot(sensor_compare, aes(distance_km, correlation)) +
   theme_minimal()
 ```
 
+```{r}
+# Create daily averages per site
+cinc_daily <- cinc_site_table_full %>%
+  group_by(site_id, date) %>%
+  summarise(pm25 = mean(pm25, na.rm = TRUE), .groups = "drop")
+
+# Convert to wide format
+library(tidyr)
+
+cinc_wide <- cinc_daily %>%
+  pivot_wider(names_from = site_id, values_from = pm25)
+
+library(ggplot2)
+
+ggplot(cinc_wide, aes(x = `1.1`, y = `2.1`)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Site 1.1", y = "Site 2.1")
+
+sites <- setdiff(names(cinc_wide), "date")
+
+library(ggplot2)
+library(gridExtra)
+
+plot_list <- list()
+
+for (i in 1:length(sites)) {
+  for (j in 1:length(sites)) {
+    
+    x_site <- sites[i]
+    y_site <- sites[j]
+    
+    df_pair <- cinc_wide %>%
+      select(all_of(c("date", x_site, y_site))) %>%
+      na.omit()
+    
+    if (nrow(df_pair) > 5) {
+      
+      r2 <- cor(df_pair[[x_site]], df_pair[[y_site]])^2
+      
+      p <- ggplot(df_pair, aes(x = .data[[x_site]], y = .data[[y_site]])) +
+        geom_point(size = 0.5) +
+        geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+        geom_smooth(method = "lm", se = FALSE) +
+        annotate("text", x = Inf, y = -Inf,
+                 label = paste0("R²=", round(r2, 2)),
+                 hjust = 1.1, vjust = -0.5, size = 2.5) +
+        labs(x = x_site, y = y_site) +
+        theme_minimal(base_size = 8)
+      
+    } else {
+      
+      p <- ggplot() + theme_void()
+    }
+    
+    plot_list[[length(plot_list) + 1]] <- p
+  }
+}
+
+grid.arrange(grobs = plot_list, ncol = length(sites))
+
+```
+
+
+```{r cinc-site-matrix-all, fig.width=38, fig.height=38, echo=FALSE, message=FALSE, warning=FALSE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gridExtra)
+
+# daily averages by combined CinC site
+cinc_daily_site <- cinc_site_table_full %>%
+  filter(grepl("^[0-9]+\\.[0-9]+(_[0-9]+\\.[0-9]+)*$", site_id)) %>%
+  group_by(site_id, date) %>%
+  summarise(
+    pm25 = mean(pm25, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# site order
+site_order <- c(
+  "1.1","2.1","3.1","5.1_19.3_24.2","7.1_4.1","7.2","8.1_34.2",
+  "9.1_17.2","11.1_32.1_18.2","12.1_5.2","13.1_33.2","14.1","15.1",
+  "18.1_26.1","19.1","19.2","20.1","20.2","21.1","23.1",
+  "24.1_1.2","25.1","27.1_9.2","28.1","29.1","30.1_17.1","31.2",
+  "32.2","33.1","34.1_16.1","35.1","35.2"
+)
+
+cinc_daily_site <- cinc_daily_site %>%
+  filter(site_id %in% site_order)
+
+# wide table
+cinc_wide <- cinc_daily_site %>%
+  pivot_wider(
+    names_from = site_id,
+    values_from = pm25,
+    values_fn = mean
+  )
+
+sites <- site_order[site_order %in% names(cinc_wide)]
+n_sites <- length(sites)
+
+# better common axis limit
+all_vals <- unlist(cinc_wide[sites], use.names = FALSE)
+all_vals <- all_vals[is.finite(all_vals)]
+
+# use a high percentile instead of the absolute max so one outlier
+# does not flatten all the other panels
+axis_min <- 0
+axis_max <- ceiling(as.numeric(quantile(all_vals, 0.99, na.rm = TRUE)) / 5) * 5
+
+plot_matrix <- vector("list", n_sites * n_sites)
+
+for (i in seq_len(n_sites)) {
+  for (j in seq_len(n_sites)) {
+
+    x_site <- sites[j]
+    y_site <- sites[i]
+    index <- (i - 1) * n_sites + j
+
+    df_pair <- cinc_wide %>%
+      select(x = all_of(x_site), y = all_of(y_site)) %>%
+      filter(!is.na(x), !is.na(y))
+
+    # default labels
+    x_lab <- if (i == n_sites) x_site else NULL
+    y_lab <- if (j == 1) y_site else NULL
+
+    if (nrow(df_pair) < 3) {
+
+      p <- ggplot() +
+        annotate(
+          "text",
+          x = 0.5, y = 0.5,
+          label = "No overlap",
+          size = 2.2
+        ) +
+        xlim(0, 1) + ylim(0, 1) +
+        labs(x = x_lab, y = y_lab) +
+        theme_minimal(base_size = 6) +
+        theme(
+          axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          panel.grid = element_blank(),
+          axis.title.x = element_text(size = 5),
+          axis.title.y = element_text(size = 5),
+          plot.margin = margin(1, 1, 1, 1)
+        )
+
+    } else {
+
+      model <- lm(y ~ x, data = df_pair)
+      r2 <- summary(model)$r.squared
+      slope <- coef(model)[2]
+      intercept <- coef(model)[1]
+
+      label_text <- sprintf(
+        "y = %.2fx %+ .2f\nR² = %.2f",
+        slope, intercept, r2
+      )
+
+      x_pos <- axis_min + 0.05 * (axis_max - axis_min)
+      y_pos <- axis_max - 0.05 * (axis_max - axis_min)
+
+      p <- ggplot(df_pair, aes(x = x, y = y)) +
+        geom_point(size = 0.35, alpha = 0.55, color = "darkgreen") +
+        geom_abline(
+          slope = 1, intercept = 0,
+          linetype = "dashed", color = "gray50", linewidth = 0.25
+        ) +
+        geom_smooth(
+          method = "lm", se = FALSE,
+          color = "steelblue", linewidth = 0.35
+        ) +
+        coord_fixed(
+          xlim = c(axis_min, axis_max),
+          ylim = c(axis_min, axis_max),
+          expand = FALSE
+        ) +
+        annotate(
+          "text",
+          x = x_pos, y = y_pos,
+          label = label_text,
+          hjust = 0, vjust = 1,
+          size = 1.4
+        ) +
+        labs(x = x_lab, y = y_lab) +
+        theme_minimal(base_size = 6) +
+        theme(
+          axis.title.x = element_text(size = 5),
+          axis.title.y = element_text(size = 5),
+          axis.text = element_text(size = 3.5),
+          panel.grid.minor = element_blank(),
+          plot.margin = margin(1, 1, 1, 1)
+        )
+    }
+
+    plot_matrix[[index]] <- p
+  }
+}
+
+grid_plot <- grid.arrange(
+  grobs = plot_matrix,
+  ncol = n_sites,
+  nrow = n_sites,
+  top = "CinC Site-to-Site Matrix Plot (Daily PM2.5)"
+)
+
+# save large
+ggsave(
+  "cinc_site_matrix_daily.pdf",
+  plot = grid_plot,
+  width = 34,
+  height = 34
+)
+
+ggsave(
+  "cinc_site_matrix_daily.png",
+  plot = grid_plot,
+  width = 34,
+  height = 34,
+  dpi = 300
+)
+```
 
 
 ```{r}
@@ -475,8 +1312,6 @@ ggplot(sensor_compare, aes(x = distance_km, y = correlation)) +
   ) +
   theme_minimal()
 ```
-
-
 
 ```{r}
 
@@ -560,8 +1395,6 @@ range(sensor_locations_clean$latitude)
 range(sensor_locations_clean$longitude)
 ```
 
-
-
 ```{r}
 library(ggplot2)
 library(maps)
@@ -596,7 +1429,8 @@ ggplot() +
   theme_minimal()
 ```
 
- # make one clean location per sensor
+# make one clean location per sensor
+
 ```{r}
 sensor_locations_clean <- cinc_pm25 %>%
   mutate(
@@ -674,7 +1508,9 @@ ggplot(sensor_compare_unique, aes(distance_km, correlation)) +
   theme_minimal()
 
 ```
+
 # sensors with unusually low correlation
+
 ```{r}
 sensor_compare_unique %>%
   filter(correlation < 0.4) %>%
@@ -692,6 +1528,7 @@ sensor_compare_unique %>%
 ```
 
 # pairwise comparison for CLEANinCLE sites using daily averages.
+
 ```{r}
 # daily averages for each CinC sensor
 library(dplyr)
@@ -825,7 +1662,9 @@ ggplot(sensor_compare, aes(x = distance_km, y = correlation)) +
   )
 
 ```
+
 # Pairwise comparison for CLEANinCLE sites (Hourly averages)
+
 ```{r}
 # CinC half-hour data to hourly averages
 
@@ -884,6 +1723,11 @@ ggplot(sensor_compare_hourly, aes(distance_km, correlation)) +
   ) +
   theme_minimal(base_size = 13)
 
+# 
+```
+
+```{r}
+
 
 ```
 
@@ -917,20 +1761,1008 @@ epa_data <- bind_rows(epa_data_list)
 head(epa_data)
 dim(epa_data)
 
-# daily averages:
-epa_daily <- epa_data %>%
-  mutate(date = as.Date(date_local)) %>%
+# EPA FRM and EPA FEM
+library(dplyr)
+
+epa_data <- epa_data %>%
+  mutate(date = as.Date(date_local))
+
+# Check
+epa_data %>%
+  count(method_type, sample_duration)
+
+# FRM = filter, 24-hour
+epa_frm_daily <- epa_data %>%
+  filter(method_type == "FRM", sample_duration == "24 HOUR") %>%
+  select(site_number, date, sample_measurement) %>%
+  rename(frm_pm25 = sample_measurement) %>%
+  arrange(site_number, date)
+
+head(epa_frm_daily)
+
+# FEM = continuous/optical, hourly data averaged to daily
+epa_fem_hourly <- epa_data %>%
+  filter(method_type == "FEM", sample_duration == "1 HOUR")
+
+epa_fem_daily <- epa_fem_hourly %>%
   group_by(site_number, date) %>%
   summarise(
-    pm25_daily = mean(sample_measurement, na.rm = TRUE),
+    fem_pm25_daily = mean(sample_measurement, na.rm = TRUE),
     n_obs = n(),
     .groups = "drop"
   ) %>%
   arrange(site_number, date)
 
-head(epa_daily)
+head(epa_fem_daily)
+
+# 
+```
+
+```{r}
+# Filter daily 24-hour EPA data
+epa_filter <- epa_data %>%
+  filter(sample_duration == "24 HOUR") %>%
+  group_by(site_number, date) %>%
+  summarise(
+    pm25 = mean(sample_measurement, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Check
+head(epa_filter)
+distinct(epa_filter, site_number)
+
+
+#
+library(tidyr)
+
+epa_filter_wide <- epa_filter %>%
+  pivot_wider(
+    names_from = site_number,
+    values_from = pm25,
+    values_fn = mean
+  )
+
+head(epa_filter_wide)
+```
+
+```{r epa-6x6-filter-grid, fig.width=18, fig.height=18, echo=FALSE, message=FALSE, warning=FALSE}
+
+# 
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gridExtra)
+
+# 1. EPA filter daily table
+epa_filter <- epa_data %>%
+  filter(sample_duration == "24 HOUR") %>%
+  group_by(site_number, date) %>%
+  summarise(
+    pm25 = mean(sample_measurement, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# 2. Wide format
+epa_filter_wide <- epa_filter %>%
+  mutate(site_number = as.character(site_number)) %>%
+  pivot_wider(
+    names_from = site_number,
+    values_from = pm25,
+    values_fn = mean
+  )
+
+# 3. Site names and common axis range
+site_names <- sort(setdiff(names(epa_filter_wide), "date"))
+n_sites <- length(site_names)
+
+axis_min <- 0
+axis_max <- ceiling(max(unlist(epa_filter_wide[site_names]), na.rm = TRUE) / 5) * 5
+
+# 4. Build plot matrix
+plot_matrix <- vector("list", n_sites * n_sites)
+
+for (i in seq_len(n_sites)) {
+  for (j in seq_len(n_sites)) {
+
+    x_site <- site_names[j]
+    y_site <- site_names[i]
+    index <- (i - 1) * n_sites + j
+
+    df_pair <- epa_filter_wide %>%
+      select(x = all_of(x_site), y = all_of(y_site)) %>%
+      filter(!is.na(x) & !is.na(y))
+
+    if (nrow(df_pair) > 2) {
+      model <- lm(y ~ x, data = df_pair)
+      r2 <- round(summary(model)$r.squared, 2)
+      slope <- round(coef(model)[2], 2)
+      intercept <- round(coef(model)[1], 2)
+      label_text <- paste0("y = ", slope, "x + ", intercept, "\nR² = ", r2)
+    } else {
+      label_text <- "No overlap"
+    }
+
+    x_pos <- axis_min + 1
+    y_pos <- axis_max - 1
+
+    p <- ggplot(df_pair, aes(x = x, y = y)) +
+      geom_point(color = "darkgreen", alpha = 0.7, size = 0.9) +
+      geom_smooth(method = "lm", se = FALSE, color = "steelblue", linewidth = 0.5) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.4) +
+      coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
+      annotate(
+        "text",
+        x = x_pos, y = y_pos,
+        label = label_text,
+        hjust = 0, vjust = 1,
+        size = 2.2
+      ) +
+      labs(
+        x = paste("Site", x_site),
+        y = paste("Site", y_site)
+      ) +
+      theme_minimal(base_size = 8) +
+      theme(
+        axis.title = element_text(size = 7),
+        axis.text = element_text(size = 6),
+        panel.grid.minor = element_blank(),
+        plot.margin = margin(2, 2, 2, 2)
+      )
+
+    plot_matrix[[index]] <- p
+  }
+}
+
+# 5. Draw the 6x6 matrix
+grid_plot <- grid.arrange(
+  grobs = plot_matrix,
+  ncol = n_sites,
+  nrow = n_sites,
+  top = "EPA Filter Site-to-Site Matrix Plot (Daily PM2.5)"
+)
+
+print(grid_plot)
+
+ggsave("epa_filter_6x6_matrix.png", plot = grid_plot, width = 18, height = 18, dpi = 300)
+```
+
+# EPA Optical (Daily, ALL data) - Continuous monitors (FEM) averaged to daily.
+```{r epa-optical-daily-6x6, fig.width=18, fig.height=18, echo=FALSE, message=FALSE, warning=FALSE}
+# Create optical daily dataset
+epa_optical_daily <- epa_data %>%
+  filter(sample_duration != "24 HOUR") %>%   # keep continuous data
+  group_by(site_number, date) %>%
+  summarise(
+    pm25 = mean(sample_measurement, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#Wide format
+epa_optical_wide <- epa_optical_daily %>%
+  mutate(site_number = as.character(site_number)) %>%
+  pivot_wider(
+    names_from = site_number,
+    values_from = pm25,
+    values_fn = mean
+  )
+
+# Site names and common axis range
+site_names <- sort(setdiff(names(epa_optical_wide), "date"))
+n_sites <- length(site_names)
+
+axis_min <- 0
+axis_max <- ceiling(max(unlist(epa_optical_wide[site_names]), na.rm = TRUE) / 5) * 5
+
+# 6×6 matrix plot
+plot_matrix <- vector("list", n_sites * n_sites)
+
+for (i in seq_len(n_sites)) {
+  for (j in seq_len(n_sites)) {
+
+    x_site <- site_names[j]
+    y_site <- site_names[i]
+    index <- (i - 1) * n_sites + j
+
+    df_pair <- epa_optical_wide %>%
+      select(x = all_of(x_site), y = all_of(y_site)) %>%
+      filter(!is.na(x) & !is.na(y))
+
+    if (nrow(df_pair) > 2) {
+      model <- lm(y ~ x, data = df_pair)
+      r2 <- round(summary(model)$r.squared, 2)
+      slope <- round(coef(model)[2], 2)
+      intercept <- round(coef(model)[1], 2)
+      label_text <- paste0("y = ", slope, "x + ", intercept, "\nR² = ", r2)
+    } else {
+      label_text <- "No overlap"
+    }
+
+    x_pos <- axis_min + 1
+    y_pos <- axis_max - 1
+
+    p <- ggplot(df_pair, aes(x = x, y = y)) +
+      geom_point(color = "darkgreen", alpha = 0.7, size = 0.9) +
+      geom_smooth(method = "lm", se = FALSE, color = "steelblue", linewidth = 0.5) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.4) +
+      coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
+      annotate(
+        "text",
+        x = x_pos, y = y_pos,
+        label = label_text,
+        hjust = 0, vjust = 1,
+        size = 2.2
+      ) +
+      labs(
+        x = paste("Site", x_site),
+        y = paste("Site", y_site)
+      ) +
+      theme_minimal(base_size = 8) +
+      theme(
+        axis.title = element_text(size = 7),
+        axis.text = element_text(size = 6),
+        panel.grid.minor = element_blank(),
+        plot.margin = margin(2, 2, 2, 2)
+      )
+
+    plot_matrix[[index]] <- p
+  }
+}
+
+#
+grid_plot <- grid.arrange(
+  grobs = plot_matrix,
+  ncol = n_sites,
+  nrow = n_sites,
+  top = "EPA Optical Site-to-Site Matrix Plot (Daily PM2.5)"
+)
+
+print(grid_plot)
+
+ggsave("epa_optical_daily_6x6_matrix.png", plot = grid_plot, width = 18, height = 18, dpi = 300)
+```
+
+# EPA Optical (Daily, only filter days)
+```{r epa-optical-matched-6x6, fig.width=18, fig.height=18, echo=FALSE, message=FALSE, warning=FALSE}
+epa_optical_matched <- epa_optical_daily %>%
+  semi_join(epa_filter, by = c("site_number", "date"))
+
+# Convert to wide format
+library(tidyr)
+
+epa_optical_matched_wide <- epa_optical_matched %>%
+  mutate(site_number = as.character(site_number)) %>%
+  pivot_wider(
+    names_from = site_number,
+    values_from = pm25,
+    values_fn = mean
+  )
+
+# Site names and common axis range
+site_names <- sort(setdiff(names(epa_optical_matched_wide), "date"))
+n_sites <- length(site_names)
+
+axis_min <- 0
+axis_max <- ceiling(max(unlist(epa_optical_matched_wide[site_names]), na.rm = TRUE) / 5) * 5
+
+# 6×6 matrix plot
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+
+plot_matrix <- vector("list", n_sites * n_sites)
+
+for (i in seq_len(n_sites)) {
+  for (j in seq_len(n_sites)) {
+
+    x_site <- site_names[j]
+    y_site <- site_names[i]
+    index <- (i - 1) * n_sites + j
+
+    df_pair <- epa_optical_matched_wide %>%
+      select(x = all_of(x_site), y = all_of(y_site)) %>%
+      filter(!is.na(x) & !is.na(y))
+
+    if (nrow(df_pair) > 2) {
+      model <- lm(y ~ x, data = df_pair)
+      r2 <- round(summary(model)$r.squared, 2)
+      slope <- round(coef(model)[2], 2)
+      intercept <- round(coef(model)[1], 2)
+      label_text <- paste0("y = ", slope, "x + ", intercept, "\nR² = ", r2)
+    } else {
+      label_text <- "No overlap"
+    }
+
+    x_pos <- axis_min + 1
+    y_pos <- axis_max - 1
+
+    p <- ggplot(df_pair, aes(x = x, y = y)) +
+      geom_point(color = "darkgreen", alpha = 0.7, size = 0.9) +
+      geom_smooth(method = "lm", se = FALSE, color = "steelblue", linewidth = 0.5) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.4) +
+      coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
+      annotate(
+        "text",
+        x = x_pos, y = y_pos,
+        label = label_text,
+        hjust = 0, vjust = 1,
+        size = 2.2
+      ) +
+      labs(
+        x = paste("Site", x_site),
+        y = paste("Site", y_site)
+      ) +
+      theme_minimal(base_size = 8) +
+      theme(
+        axis.title = element_text(size = 7),
+        axis.text = element_text(size = 6),
+        panel.grid.minor = element_blank(),
+        plot.margin = margin(2, 2, 2, 2)
+      )
+
+    plot_matrix[[index]] <- p
+  }
+}
+
+grid_plot <- grid.arrange(
+  grobs = plot_matrix,
+  ncol = n_sites,
+  nrow = n_sites,
+  top = "EPA Optical Site-to-Site Matrix Plot (Daily PM2.5, Filter Days Only)"
+)
+
+print(grid_plot)
+
+ggsave("epa_optical_matched_6x6_matrix.png", plot = grid_plot, width = 18, height = 18, dpi = 300)
+
+```
+
+
+```{r epa-optical-matched-6x6, fig.width=18, fig.height=18, echo=FALSE, message=FALSE, warning=FALSE}
+# hourly dataset
+epa_optical_hourly <- epa_data %>%
+  filter(sample_duration != "24 HOUR") %>%
+  mutate(datetime = as.POSIXct(paste(date, time_local))) %>%
+  group_by(site_number, datetime) %>%
+  summarise(
+    pm25 = mean(sample_measurement, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Wide format
+epa_optical_hourly_wide <- epa_optical_hourly %>%
+  mutate(site_number = as.character(site_number)) %>%
+  pivot_wider(
+    names_from = site_number,
+    values_from = pm25,
+    values_fn = mean
+  )
+
+# Site names + axis range
+site_names <- sort(setdiff(names(epa_optical_hourly_wide), "datetime"))
+n_sites <- length(site_names)
+
+axis_min <- 0
+axis_max <- ceiling(max(unlist(epa_optical_hourly_wide[site_names]), na.rm = TRUE) / 5) * 5
+
+# 6×6 matrix
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+
+plot_matrix <- vector("list", n_sites * n_sites)
+
+for (i in seq_len(n_sites)) {
+  for (j in seq_len(n_sites)) {
+
+    x_site <- site_names[j]
+    y_site <- site_names[i]
+    index <- (i - 1) * n_sites + j
+
+    df_pair <- epa_optical_hourly_wide %>%
+      select(x = all_of(x_site), y = all_of(y_site)) %>%
+      filter(!is.na(x) & !is.na(y))
+
+    if (nrow(df_pair) > 2) {
+      model <- lm(y ~ x, data = df_pair)
+      r2 <- round(summary(model)$r.squared, 2)
+      slope <- round(coef(model)[2], 2)
+      intercept <- round(coef(model)[1], 2)
+      label_text <- paste0("y = ", slope, "x + ", intercept, "\nR² = ", r2)
+    } else {
+      label_text <- "No overlap"
+    }
+
+    x_pos <- axis_min + 1
+    y_pos <- axis_max - 1
+
+    p <- ggplot(df_pair, aes(x = x, y = y)) +
+      geom_point(color = "darkgreen", alpha = 0.6, size = 0.7) +
+      geom_smooth(method = "lm", se = FALSE, color = "steelblue", linewidth = 0.4) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.3) +
+      coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
+      annotate(
+        "text",
+        x = x_pos, y = y_pos,
+        label = label_text,
+        hjust = 0, vjust = 1,
+        size = 2
+      ) +
+      labs(
+        x = paste("Site", x_site),
+        y = paste("Site", y_site)
+      ) +
+      theme_minimal(base_size = 7) +
+      theme(
+        axis.title = element_text(size = 6),
+        axis.text = element_text(size = 5),
+        panel.grid.minor = element_blank(),
+        plot.margin = margin(2, 2, 2, 2)
+      )
+
+    plot_matrix[[index]] <- p
+  }
+}
+
+grid_plot <- grid.arrange(
+  grobs = plot_matrix,
+  ncol = n_sites,
+  nrow = n_sites,
+  top = "EPA Optical Site-to-Site Matrix Plot (Hourly PM2.5)"
+)
+
+print(grid_plot)
+```
+
+# Correlation vs Distance
+```{r}
+epa_coords <- epa_data %>%
+  select(site_number, latitude, longitude) %>%
+  distinct() %>%
+  mutate(site_number = as.character(site_number))
+
+# Compute distance matrix
+library(geosphere)
+
+dist_matrix <- distm(
+  epa_coords[, c("longitude", "latitude")],
+  fun = distHaversine
+)
+
+rownames(dist_matrix) <- epa_coords$site_number
+colnames(dist_matrix) <- epa_coords$site_number 
+
+# Convert to long format
+library(tidyr)
+
+dist_long <- as.data.frame(dist_matrix) %>%
+  mutate(site1 = rownames(dist_matrix)) %>%
+  pivot_longer(-site1, names_to = "site2", values_to = "distance_m") %>%
+  mutate(distance_km = distance_m / 1000)
+
+epa_r2 <- list()
+
+site_names <- sort(setdiff(names(epa_filter_wide), "date"))
+
+for (i in seq_along(site_names)) {
+  for (j in seq_along(site_names)) {
+
+    site_i <- site_names[i]
+    site_j <- site_names[j]
+
+    df_pair <- epa_filter_wide %>%
+      select(x = all_of(site_i), y = all_of(site_j)) %>%
+      filter(!is.na(x) & !is.na(y))
+
+    if (nrow(df_pair) > 5) {
+      r2 <- summary(lm(y ~ x, data = df_pair))$r.squared
+    } else {
+      r2 <- NA
+    }
+
+    epa_r2[[length(epa_r2) + 1]] <- data.frame(
+      site1 = site_i,
+      site2 = site_j,
+      r2 = r2
+    )
+  }
+}
+
+epa_r2_df <- bind_rows(epa_r2)
+
+cor_dist <- epa_r2_df %>%
+  left_join(dist_long, by = c("site1", "site2")) %>%
+  filter(site1 != site2)
+
+cor_dist_clean <- cor_dist %>%
+  filter(site1 < site2)   # removes duplicates + diagonal
+
+# Plot correlation vs distance
+ggplot(cor_dist, aes(x = distance_km, y = r2)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "Correlation vs Distance Between EPA Sites",
+    x = "Distance (km)",
+    y = "R² (Correlation Strength)"
+  ) +
+  theme_minimal()
+
+
+```
+# EPA daily tables 
+```{r}
+library(tidyr)
+
+# FRM daily wide
+epa_frm_wide <- epa_frm_daily %>%
+  mutate(site = paste0("site_", site_number)) %>%
+  select(date, site, frm_pm25) %>%
+  pivot_wider(
+    names_from = site,
+    values_from = frm_pm25
+  )
+
+head(epa_frm_wide) 
+
+# FEM daily wide, all days
+library(dplyr)
+library(tidyr)
+
+# collapse duplicate FRM rows first
+epa_frm_daily_clean <- epa_frm_daily %>%
+  group_by(site_number, date) %>%
+  summarise(
+    frm_pm25 = mean(frm_pm25, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(site_number, date)
+
+# now make the wide table
+epa_frm_wide <- epa_frm_daily_clean %>%
+  mutate(site = paste0("site_", site_number)) %>%
+  select(date, site, frm_pm25) %>%
+  pivot_wider(
+    names_from = site,
+    values_from = frm_pm25
+  )
+
+# check
+str(epa_frm_wide)
+head(epa_frm_wide)
+
+# FEM daily wide, FRM days only
+epa_fem_on_frm_days <- epa_fem_daily %>%
+  inner_join(
+    epa_frm_daily %>% select(site_number, date),
+    by = c("site_number", "date")
+  )
+
+epa_fem_on_frm_wide <- epa_fem_on_frm_days %>%
+  mutate(site = paste0("site_", site_number)) %>%
+  select(date, site, fem_pm25_daily) %>%
+  pivot_wider(
+    names_from = site,
+    values_from = fem_pm25_daily
+  )
+
+head(epa_fem_on_frm_wide)
+
+# Create the EPA site location table
+epa_locations <- epa_data %>%
+  mutate(site = paste0("site_", site_number)) %>%
+  select(site, latitude, longitude) %>%
+  distinct() %>%
+  filter(!is.na(latitude), !is.na(longitude)) %>%
+  group_by(site) %>%
+  summarise(
+    lat = first(latitude),
+    lon = first(longitude),
+    .groups = "drop"
+  ) %>%
+  arrange(site)
+
+epa_locations
+
+# Build EPA distance table
+library(geosphere)
+
+epa_coords <- epa_locations %>%
+  select(lon, lat) %>%
+  as.matrix()
+
+epa_dist_matrix <- distm(epa_coords, fun = distHaversine) / 1000
+
+rownames(epa_dist_matrix) <- epa_locations$site
+colnames(epa_dist_matrix) <- epa_locations$site
+
+epa_dist_long <- as.data.frame(as.table(epa_dist_matrix))
+colnames(epa_dist_long) <- c("site1", "site2", "distance_km")
+
+head(epa_dist_long)
+
+
+# EPA pairwise matrix plots
+library(ggplot2)
+library(gridExtra)
+
+make_epa_pairwise_matrix <- function(wide_df, value_label, plot_title) {
+  
+  site_names <- names(wide_df)[names(wide_df) != "date"]
+  plots <- list()
+  
+  for (i in seq_along(site_names)) {
+    for (j in seq_along(site_names)) {
+      
+      site_i <- site_names[i]
+      site_j <- site_names[j]
+      
+      df <- wide_df %>%
+        select(date, all_of(site_i), all_of(site_j)) %>%
+        rename(x = all_of(site_i), y = all_of(site_j)) %>%
+        filter(!is.na(x), !is.na(y))
+      
+      if (nrow(df) > 2) {
+        fit <- lm(y ~ x, data = df)
+        r2 <- summary(fit)$r.squared
+        intercept <- coef(fit)[1]
+        slope <- coef(fit)[2]
+        label_text <- sprintf("y = %.2fx %+ .2f\nR² = %.2f", slope, intercept, r2)
+      } else {
+        label_text <- "n < 3"
+      }
+      
+      p <- ggplot(df, aes(x = x, y = y)) +
+        geom_point(size = 1.6, alpha = 0.7) +
+        geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray40") +
+        geom_smooth(method = "lm", se = FALSE, color = "steelblue", linewidth = 0.9) +
+        annotate(
+          "text",
+          x = min(df$x, na.rm = TRUE),
+          y = max(df$y, na.rm = TRUE),
+          label = label_text,
+          hjust = 0, vjust = 1,
+          size = 3.2
+        ) +
+        labs(
+          title = paste0(sub("site_", "", site_i), " vs ", sub("site_", "", site_j)),
+          x = paste0(sub("site_", "", site_i), " ", value_label),
+          y = paste0(sub("site_", "", site_j), " ", value_label)
+        ) +
+        theme_minimal(base_size = 10) +
+        theme(
+          plot.title = element_text(face = "bold", hjust = 0.5, size = 10),
+          panel.grid.minor = element_blank()
+        )
+      
+      plots[[length(plots) + 1]] <- p
+    }
+  }
+  
+  marrangeGrob(plots, nrow = length(site_names), ncol = length(site_names), top = plot_title)
+}
+
+```
+
+
+```{r fig_epa_frm_pairwise, fig.width=18, fig.height=18}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gridExtra)
+
+# Clean FRM daily data
+epa_24hr_clean <- epa_frm_daily %>%
+  group_by(site_number, date) %>%
+  summarise(
+    pm25 = mean(frm_pm25, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Wide format
+epa_wide <- epa_24hr_clean %>%
+  select(date, site_number, pm25) %>%
+  mutate(site_number = as.character(site_number)) %>%
+  pivot_wider(
+    names_from = site_number,
+    values_from = pm25,
+    values_fn = mean
+  ) %>%
+  filter(rowSums(is.na(across(-date))) < 3)
+
+# Plot settings
+site_names <- sort(setdiff(names(epa_wide), "date"))
+n_sites <- length(site_names)
+axis_min <- 0
+axis_max <- 50
+
+plot_matrix <- vector("list", n_sites * n_sites)
+
+for (i in seq_len(n_sites)) {
+  for (j in seq_len(n_sites)) {
+    
+    x_site <- site_names[j]
+    y_site <- site_names[i]
+    index <- (i - 1) * n_sites + j
+
+    df_pair <- epa_wide %>%
+      select(x = all_of(x_site), y = all_of(y_site)) %>%
+      filter(!is.na(x) & !is.na(y))
+
+    if (nrow(df_pair) > 2) {
+      model <- lm(y ~ x, data = df_pair)
+      r2 <- round(summary(model)$r.squared, 2)
+      slope <- round(coef(model)[2], 2)
+      intercept <- round(coef(model)[1], 2)
+      label_text <- paste0("y = ", slope, "x + ", intercept, "\nR² = ", r2)
+    } else {
+      label_text <- "Insufficient data"
+    }
+
+    x_pos <- axis_min + 1
+    y_pos <- axis_max - 1
+
+    p <- ggplot(df_pair, aes(x = x, y = y)) +
+      geom_point(color = "steelblue", alpha = 0.7, size = 1.8) +
+      geom_smooth(method = "lm", se = FALSE, color = "red", linewidth = 1) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+      coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
+      labs(
+        x = paste("Site", x_site),
+        y = paste("Site", y_site)
+      ) +
+      annotate(
+        "text",
+        x = x_pos, y = y_pos,
+        label = label_text,
+        hjust = 0, vjust = 1,
+        size = 3.5
+      ) +
+      theme_minimal(base_size = 12) +
+      theme(
+        axis.title = element_text(size = 10),
+        axis.text = element_text(size = 9),
+        plot.margin = margin(5, 5, 5, 5)
+      )
+
+    plot_matrix[[index]] <- p
+  }
+}
+
+grid_plot <- grid.arrange(
+  grobs = plot_matrix,
+  ncol = n_sites,
+  nrow = n_sites,
+  top = "EPA FRM vs FRM Pairwise Comparison"
+)
+
+print(grid_plot)
+
+```
+
+
+```{r epa-6x6-fem-grid-all-days, fig.width=22, fig.height=22}
+
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gridExtra)
+
+# Keep only FEM data on dates where FRM exists at the same site
+epa_fem_on_frm_days <- epa_fem_daily %>%
+  inner_join(
+    epa_frm_daily %>% select(site_number, date),
+    by = c("site_number", "date")
+  )
+
+# Clean FEM daily data on FRM days only
+epa_fem_frm_clean <- epa_fem_on_frm_days %>%
+  group_by(site_number, date) %>%
+  summarise(
+    pm25 = mean(fem_pm25_daily, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Wide format
+epa_fem_frm_wide <- epa_fem_frm_clean %>%
+  select(date, site_number, pm25) %>%
+  mutate(site_number = as.character(site_number)) %>%
+  pivot_wider(
+    names_from = site_number,
+    values_from = pm25,
+    values_fn = mean
+  ) %>%
+  filter(rowSums(is.na(across(-date))) < 3)
+
+# Plot settings
+site_names <- sort(setdiff(names(epa_fem_frm_wide), "date"))
+n_sites <- length(site_names)
+axis_min <- 0
+axis_max <- 50
+
+plot_matrix <- vector("list", n_sites * n_sites)
+
+for (i in seq_len(n_sites)) {
+  for (j in seq_len(n_sites)) {
+    
+    x_site <- site_names[j]
+    y_site <- site_names[i]
+    index <- (i - 1) * n_sites + j
+
+    df_pair <- epa_fem_frm_wide %>%
+      select(x = all_of(x_site), y = all_of(y_site)) %>%
+      filter(!is.na(x) & !is.na(y))
+
+    if (nrow(df_pair) > 2) {
+      model <- lm(y ~ x, data = df_pair)
+      r2 <- round(summary(model)$r.squared, 2)
+      slope <- round(coef(model)[2], 2)
+      intercept <- round(coef(model)[1], 2)
+      label_text <- paste0("y = ", slope, "x + ", intercept, "\nR² = ", r2)
+    } else {
+      label_text <- "Insufficient data"
+    }
+
+    x_pos <- axis_min + 1
+    y_pos <- axis_max - 1
+
+    p <- ggplot(df_pair, aes(x = x, y = y)) +
+      geom_point(color = "steelblue", alpha = 0.7, size = 1.8) +
+      geom_smooth(method = "lm", se = FALSE, color = "red", linewidth = 1) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+      coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
+      labs(
+        x = paste("Site", x_site),
+        y = paste("Site", y_site)
+      ) +
+      annotate(
+        "text",
+        x = x_pos, y = y_pos,
+        label = label_text,
+        hjust = 0, vjust = 1,
+        size = 3.5
+      ) +
+      theme_minimal(base_size = 12) +
+      theme(
+        axis.title = element_text(size = 10),
+        axis.text = element_text(size = 9),
+        plot.margin = margin(5, 5, 5, 5)
+      )
+
+    plot_matrix[[index]] <- p
+  }
+}
+
+grid_plot <- grid.arrange(
+  grobs = plot_matrix,
+  ncol = n_sites,
+  nrow = n_sites,
+  top = "EPA FEM vs FEM Pairwise Comparison (FRM Days Only)"
+)
+
+print(grid_plot)
+```
+
+
+
+```{r epa-6x6-fem-grid-all-days, fig.width=22, fig.height=22, echo=FALSE, message=FALSE, warning=FALSE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gridExtra)
+
+# Clean FEM daily data (all days)
+epa_fem_clean <- epa_fem_daily %>%
+  group_by(site_number, date) %>%
+  summarise(
+    pm25 = mean(fem_pm25_daily, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Wide format
+epa_fem_wide <- epa_fem_clean %>%
+  select(date, site_number, pm25) %>%
+  mutate(site_number = as.character(site_number)) %>%
+  pivot_wider(
+    names_from = site_number,
+    values_from = pm25,
+    values_fn = mean
+  ) %>%
+  filter(rowSums(is.na(across(-date))) < 3)
+
+# Plot settings
+site_names <- sort(setdiff(names(epa_fem_wide), "date"))
+n_sites <- length(site_names)
+axis_min <- 0
+axis_max <- 50
+
+plot_matrix <- vector("list", n_sites * n_sites)
+
+for (i in seq_len(n_sites)) {
+  for (j in seq_len(n_sites)) {
+    
+    x_site <- site_names[j]
+    y_site <- site_names[i]
+    index <- (i - 1) * n_sites + j
+
+    df_pair <- epa_fem_wide %>%
+      select(x = all_of(x_site), y = all_of(y_site)) %>%
+      filter(!is.na(x) & !is.na(y))
+
+    if (nrow(df_pair) > 2) {
+      model <- lm(y ~ x, data = df_pair)
+      r2 <- round(summary(model)$r.squared, 2)
+      slope <- round(coef(model)[2], 2)
+      intercept <- round(coef(model)[1], 2)
+      label_text <- paste0("y = ", slope, "x + ", intercept, "\nR² = ", r2)
+    } else {
+      label_text <- "Insufficient data"
+    }
+
+    x_pos <- axis_min + 1
+    y_pos <- axis_max - 1
+
+    p <- ggplot(df_pair, aes(x = x, y = y)) +
+      geom_point(color = "steelblue", alpha = 0.7, size = 1.8) +
+      geom_smooth(method = "lm", se = FALSE, color = "red", linewidth = 1) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+      coord_fixed(xlim = c(axis_min, axis_max), ylim = c(axis_min, axis_max)) +
+      labs(
+        x = paste("Site", x_site),
+        y = paste("Site", y_site)
+      ) +
+      annotate(
+        "text",
+        x = x_pos, y = y_pos,
+        label = label_text,
+        hjust = 0, vjust = 1,
+        size = 3.5
+      ) +
+      theme_minimal(base_size = 12) +
+      theme(
+        axis.title = element_text(size = 10),
+        axis.text = element_text(size = 9),
+        plot.margin = margin(5, 5, 5, 5)
+      )
+
+    plot_matrix[[index]] <- p
+  }
+}
+
+grid_plot <- grid.arrange(
+  grobs = plot_matrix,
+  ncol = n_sites,
+  nrow = n_sites,
+  top = "EPA FEM vs FEM Pairwise Comparison (All Days)"
+)
+
+print(grid_plot)
+
+```
+
+# EPA site location table 
+epa_locations <- epa_data %>%
+  mutate(site = paste0("site_", site_number)) %>%
+  select(site, latitude, longitude) %>%
+  distinct() %>%
+  filter(!is.na(latitude), !is.na(longitude)) %>%
+  group_by(site) %>%
+  summarise(
+    lat = first(latitude),
+    lon = first(longitude),
+    .groups = "drop"
+  ) %>%
+  arrange(site)
+
+epa_locations
+
+
+
 ```
 # Convert EPA data to wide format
+
 ```{r}
 library(tidyr)
 
@@ -982,6 +2814,7 @@ epa_cor_df <- melt(epa_cor_matrix) %>%
   )
 ```
 
+#
 ```{r}
 # epa_locations 
 epa_locations <- epa_data %>%
@@ -1001,8 +2834,153 @@ epa_locations %>%
 
 epa_locations
 
+# EPA distance table 
+library(geosphere)
+
+epa_coords <- epa_locations %>%
+  select(lon, lat) %>%
+  as.matrix()
+
+epa_dist_matrix <- distm(epa_coords, fun = distHaversine) / 1000
+
+rownames(epa_dist_matrix) <- epa_locations$site
+colnames(epa_dist_matrix) <- epa_locations$site
+
+epa_dist_long <- as.data.frame(as.table(epa_dist_matrix))
+colnames(epa_dist_long) <- c("site1", "site2", "distance_km")
+
+head(epa_dist_long)
+
+library(ggplot2)
+library(gridExtra)
+
+make_epa_pairwise_matrix <- function(wide_df, value_label, plot_title) {
+  
+  site_names <- names(wide_df)[names(wide_df) != "date"]
+  plots <- list()
+  
+  for (i in seq_along(site_names)) {
+    for (j in seq_along(site_names)) {
+      
+      site_i <- site_names[i]
+      site_j <- site_names[j]
+      
+      df <- wide_df %>%
+        select(date, all_of(site_i), all_of(site_j)) %>%
+        rename(x = all_of(site_i), y = all_of(site_j)) %>%
+        filter(!is.na(x), !is.na(y))
+      
+      if (nrow(df) > 2) {
+        fit <- lm(y ~ x, data = df)
+        r2 <- summary(fit)$r.squared
+        intercept <- coef(fit)[1]
+        slope <- coef(fit)[2]
+        label_text <- sprintf("y = %.2fx %+ .2f\nR² = %.2f", slope, intercept, r2)
+      } else {
+        label_text <- "n < 3"
+      }
+      
+      p <- ggplot(df, aes(x = x, y = y)) +
+        geom_point(size = 1.6, alpha = 0.7) +
+        geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray40") +
+        geom_smooth(method = "lm", se = FALSE, color = "steelblue", linewidth = 0.9) +
+        annotate(
+          "text",
+          x = min(df$x, na.rm = TRUE),
+          y = max(df$y, na.rm = TRUE),
+          label = label_text,
+          hjust = 0, vjust = 1,
+          size = 3.2
+        ) +
+        labs(
+          title = paste0(sub("site_", "", site_i), " vs ", sub("site_", "", site_j)),
+          x = paste0(sub("site_", "", site_i), " ", value_label),
+          y = paste0(sub("site_", "", site_j), " ", value_label)
+        ) +
+        theme_minimal(base_size = 10) +
+        theme(
+          plot.title = element_text(face = "bold", hjust = 0.5, size = 10),
+          panel.grid.minor = element_blank()
+        )
+      
+      plots[[length(plots) + 1]] <- p
+    }
+  }
+  
+  marrangeGrob(plots, nrow = length(site_names), ncol = length(site_names), top = plot_title)
+}
+
+# EPA pairwise matrix plots
+library(ggplot2)
+library(gridExtra)
+
+make_epa_pairwise_matrix <- function(wide_df, value_label, plot_title) {
+  
+  site_names <- names(wide_df)[names(wide_df) != "date"]
+  plots <- list()
+  
+  for (i in seq_along(site_names)) {
+    for (j in seq_along(site_names)) {
+      
+      site_i <- site_names[i]
+      site_j <- site_names[j]
+      
+      df <- wide_df %>%
+        select(date, all_of(site_i), all_of(site_j)) %>%
+        rename(x = all_of(site_i), y = all_of(site_j)) %>%
+        filter(!is.na(x), !is.na(y))
+      
+      if (nrow(df) > 2) {
+        fit <- lm(y ~ x, data = df)
+        r2 <- summary(fit)$r.squared
+        intercept <- coef(fit)[1]
+        slope <- coef(fit)[2]
+        label_text <- sprintf("y = %.2fx %+ .2f\nR² = %.2f", slope, intercept, r2)
+      } else {
+        label_text <- "n < 3"
+      }
+      
+      p <- ggplot(df, aes(x = x, y = y)) +
+        geom_point(size = 1.6, alpha = 0.7) +
+        geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray40") +
+        geom_smooth(method = "lm", se = FALSE, color = "steelblue", linewidth = 0.9) +
+        annotate(
+          "text",
+          x = min(df$x, na.rm = TRUE),
+          y = max(df$y, na.rm = TRUE),
+          label = label_text,
+          hjust = 0, vjust = 1,
+          size = 3.2
+        ) +
+        labs(
+          title = paste0(sub("site_", "", site_i), " vs ", sub("site_", "", site_j)),
+          x = paste0(sub("site_", "", site_i), " ", value_label),
+          y = paste0(sub("site_", "", site_j), " ", value_label)
+        ) +
+        theme_minimal(base_size = 10) +
+        theme(
+          plot.title = element_text(face = "bold", hjust = 0.5, size = 10),
+          panel.grid.minor = element_blank()
+        )
+      
+      plots[[length(plots) + 1]] <- p
+    }
+  }
+  
+  marrangeGrob(plots, nrow = length(site_names), ncol = length(site_names), top = plot_title)
+}
+
 ```
-# EPA FRM CORRELATION vs. DISTANCE 
+
+```{r}
+
+
+
+```
+```
+
+# EPA FRM CORRELATION vs. DISTANCE
+
 ```{r}
 # distances between EPA sites
 library(geosphere)
@@ -1050,6 +3028,7 @@ ggplot(epa_compare, aes(distance_km, correlation)) +
 ```
 
 # FRM filter data (24-hour reference measurements)
+
 ```{r}
 epa_frm_24hr <- epa_data %>%
   filter(
@@ -1060,8 +3039,8 @@ epa_frm_24hr <- epa_data %>%
 head(epa_frm_24hr)
 ```
 
-
 # FEM optical daily averages
+
 ```{r}
 epa_fem_24hr <- epa_data %>%
   filter(
@@ -1116,7 +3095,6 @@ ggplot(epa_compare,
   ) +
   theme_minimal()
 ```
-
 
 ```{r figA-plot, fig.width=12, fig.height=9}
 library(dplyr)
@@ -1191,6 +3169,7 @@ ggplot(figA_table, aes(PM25_FRM, PM25_FEM)) +
 ```
 
 # Compare CinC vs EPA (Filter / FRM)
+
 ```{r cinc_epa_frm_comparison, fig.width=10, fig.height=7, echo=FALSE}
 # Identify the nearest CinC sensor to each EPA site
 library(dplyr)
@@ -1351,6 +3330,7 @@ p6 <- make_panel("0073")
 ```
 
 # CLEANinCLE vs EPA optical (daily averages)
+
 ```{r fig_cinc_vs_epa_optical, fig.width=11, fig.height=7}
 # EPA optical daily data
 epa_optical_daily <- epa_fem_daily %>%
@@ -1445,7 +3425,6 @@ p6 <- make_panel_optical("0073")
     )
   )
 ```
-
 
 ```{r fig_epa_optical_vs_frm, fig.width=11, fig.height=7}
 figD_table <- epa_compare %>%
@@ -1543,6 +3522,5 @@ ggplot(epa_optical_cor_long, aes(Var1, Var2, fill = value)) +
   )
 
 ```
-
 
 Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
