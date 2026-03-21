@@ -61,69 +61,29 @@ figure_file <- here("figures", "figure_name.png")           # output plot
 # shape_file  <- here("data", "external", "boundary.shp")    # spatial boundary file
 
 # ---- Parameters / constants ----
-start_date <- as.Date("2025-01-01")   # analysis start date
-end_date   <- as.Date("2025-12-31")   # analysis end date
+# start_date <- as.Date("2025-01-01")   # analysis start date
+# end_date   <- as.Date("2025-12-31")   # analysis end date
+# edit this section as appropriate - add more
 
-pm25_threshold <- 35                  # EPA 24-hr standard (µg/m³)
 timezone_local <- "America/New_York"  # local timezone
 
 # ---- Expected columns ----
 # input_file should contain:
 # device_id, datetime, pm25, latitude, longitude
 
-# ---- Sanity checks ----
-stopifnot(file.exists(input_file))
+# ---- Sanity checks for codes that take a long time to run ----
+# stopifnot(file.exists(input_file))
 # stopifnot(file.exists(lookup_file))
 
 # ---- Read data ----
-df <- read_csv(input_file)
+input_file <- read_csv(input_file.csv)
 
 # Quick inspection
-glimpse(df)
-summary(df)
+glimpse(input_file)
+summary(input_file)
 
-# ---- Data cleaning / preprocessing ----
-# df_clean <- df %>%
-#   mutate(
-#     datetime = ymd_hms(datetime, tz = timezone_local),
-#     date = as.Date(datetime)
-#   ) %>%
-#   filter(date >= start_date, date <= end_date)
 
-# ---- Analysis / transformation ----
-# df_summary <- df_clean %>%
-#   group_by(device_id, date) %>%
-#   summarise(
-#     mean_pm25 = mean(pm25, na.rm = TRUE),
-#     max_pm25  = max(pm25, na.rm = TRUE),
-#     n_obs     = sum(!is.na(pm25))
-#   ) %>%
-#   ungroup()
 
-# ---- Spatial conversion (if needed) ----
-# df_sf <- df_clean %>%
-#   st_as_sf(coords = c("longitude", "latitude"), crs = 4326)
-
-# ---- Plotting (if needed) ----
-# p <- df_summary %>%
-#   ggplot(aes(x = date, y = mean_pm25, color = device_id)) +
-#   geom_line() +
-#   labs(
-#     title = "Daily Mean PM2.5 by Device",
-#     x = "Date",
-#     y = expression(PM[2.5]~(mu*g/m^3))
-#   )
-#
-# print(p)
-# ggsave(filename = figure_file, plot = p, width = 8, height = 5, dpi = 300)
-
-# ---- Write outputs ----
-# write_csv(df_summary, output_file)
-
-# ---- Final checks / diagnostics ----
-# glimpse(df_summary)
-# count(df_clean, device_id)
-# skimr::skim(df_clean)   # optional package
 
 # ---- Reproducibility info ----
 sessionInfo()
