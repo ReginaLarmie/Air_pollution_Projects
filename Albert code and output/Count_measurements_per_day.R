@@ -39,6 +39,7 @@
 library(tidyverse)   # data import, wrangling, plotting
 library(lubridate)   # dates and times
 library(here)        # reproducible file paths
+library(grid)        # used in plotting routines
 
 # Optional (uncomment if needed)
 # library(sf)         # spatial data / mapping
@@ -171,8 +172,6 @@ site_date_counts <- site_date_counts %>%
   mutate(site_id = factor(site_id, levels = site_levels))
 
 ## Plotting routine
-
-library(grid)
 
 # Monthly breaks
 x_breaks <- seq.Date(
