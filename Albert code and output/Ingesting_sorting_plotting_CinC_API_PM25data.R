@@ -86,7 +86,7 @@ plot_data <- plot_data %>%
 # ---- Save plot_data file as an rds file for future week-long plotting
 saveRDS(
   plot_data,
-  file.path("Albert code and output", "data", "processed", "CinC_API_hourlydata.rds")
+  file.path("Albert code and output", "data", "processed", "CinC_API_halfhourlydata.rds")
 )
 
 # ---- Define plotting function for one site and one page ----
