@@ -10,9 +10,9 @@
 #   - data/raw/EPA_FEM_hourly_PM25.csv
 #
 # Outputs:
-#   - data/processed/...
-#   - figures/...
-#   - tables/...
+#   - a 2 page PDF with plots of the EPA PM2.5 FEM hourly data as 14 month-long
+#      time series.
+#   - the EPA data cleaned up and stored efficiently as EPA_FEM_hourlydata.rds
 #
 # Upstream / Downstream Workflow:
 #   Run after: not applic   
@@ -142,6 +142,11 @@ plot_data <- plot_data %>%
     month_facet = factor(month_start, levels = month_sequence)
   )
 
+saveRDS(
+  plot_data,
+  file.path("Albert code and output", "data", "processed", "EPA_FEM_hourlydata.rds")
+  )
+
 #------------------------------------------------------------
 # 5. Define a plotting function for one site and one page
 #------------------------------------------------------------
@@ -261,7 +266,7 @@ for (site_id in names(site_list)) {
   
   # Open a PDF device for this site
   pdf(
-    file   = paste0("EPA_PM25_", site_id, "_monthly_timeseries.pdf"),
+    file   = file.path("Albert code and output/ouputs", paste0("EPA_PM25_", site_id, "_monthly_timeseries.pdf")),
     width  = 8.5,
     height = 11,
     onefile = TRUE
