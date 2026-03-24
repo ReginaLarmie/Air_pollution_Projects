@@ -109,7 +109,7 @@ p <- ggplot(week_data, aes(x = datetime_local, y = PM25)) +
     expand = expansion(mult = c(0.05, 0.08))
   ) +
   labs(
-    title = paste("Hourly PM2.5 for Week Beginning", format(week_start_date, "%b %d, %Y")),
+    title = paste("Half-hourly PM2.5 for Week Beginning", format(week_start_date, "%b %d, %Y")),
     subtitle = paste("CLEANinCLE Site", site_to_plot),
     x = "Date",
     y = expression(PM[2.5]~"(" * mu * "g/m"^3 * ")")

@@ -173,6 +173,17 @@ make_site_page_plot <- function(data_site, site_id, facet_months, page_num) {
     )
   
   ggplot(page_data, aes(x = datetime_local, y = PM25)) +
+    geom_vline(
+      xintercept = seq(
+        from = min(page_data$datetime_local, na.rm = TRUE),
+        to   = max(page_data$datetime_local, na.rm = TRUE),
+        by   = "1 day"
+      ),
+      linetype = "dashed",
+      linewidth = 0.2,
+      color = "gray60",
+      alpha = 0.7
+    ) +
     geom_line(linewidth = 0.25) +
     geom_point(size = 0.25, alpha = 0.5) +
     
@@ -245,6 +256,14 @@ site_list <- split(plot_data, plot_data$aqs_site_id)
 #   height = 11 inches
 #------------------------------------------------------------
 
+output_dir <- file.path(
+  "Albert code and output",
+  "output",
+  "monthly_EPA_FEM_plots"
+)
+
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
 for (site_id in names(site_list)) {
   
   data_site <- site_list[[site_id]]
@@ -266,7 +285,10 @@ for (site_id in names(site_list)) {
   
   # Open a PDF device for this site
   pdf(
-    file   = file.path("Albert code and output/ouputs", paste0("EPA_PM25_", site_id, "_monthly_timeseries.pdf")),
+    file = file.path(
+      output_dir,
+      paste0("EPA_PM25_", site_id, "_monthly_timeseries.pdf")
+    ),
     width  = 8.5,
     height = 11,
     onefile = TRUE

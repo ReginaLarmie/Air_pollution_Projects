@@ -25,7 +25,7 @@ library(here)        # reproducible file paths
 # Use the same dashed site format you created earlier.
 #------------------------------------------------------------
 
-site_to_plot <- "39-035-0038"
+site_to_plot <- "39-035-0060"
 week_start_date <- as.Date("2025-09-07")   # must be a Sunday
 
 #------------------------------------------------------------
