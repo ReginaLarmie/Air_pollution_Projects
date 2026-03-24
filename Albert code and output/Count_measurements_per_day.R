@@ -39,6 +39,7 @@
 library(tidyverse)   # data import, wrangling, plotting
 library(lubridate)   # dates and times
 library(here)        # reproducible file paths
+library(grid)        # used in plotting routines
 
 # Optional (uncomment if needed)
 # library(sf)         # spatial data / mapping
@@ -154,10 +155,23 @@ output_file <- here("Albert code and output", "CinC_final_table_v2-DataPerDay.cs
 
 write_csv(site_date_counts, output_file)
 
+## Sort site_date_counts so that sites will be in correct order, e.g., site
+# IDs in original order 1.1, 12.1_5.2, 13.1_33.2, 20.2, 35.2, 5.1_19.3_24.2
+# will be ordered 1.1, 5.1_19.3_24.2, 12.1_5.2, 13.1_33.2, 20.2, 35.2
+
+site_levels <- site_date_counts %>%
+  distinct(site_id) %>%
+  mutate(
+    site_id_leading = str_extract(site_id, "^[^_]+"),
+    site_id_sort = as.numeric(site_id_leading)
+  ) %>%
+  arrange(site_id_sort, site_id) %>%
+  pull(site_id)
+
+site_date_counts <- site_date_counts %>%
+  mutate(site_id = factor(site_id, levels = site_levels))
 
 ## Plotting routine
-
-library(grid)
 
 # Monthly breaks
 x_breaks <- seq.Date(
@@ -193,6 +207,7 @@ p <- site_date_counts %>%
     minor_breaks = NULL
   ) +
   theme(
+    plot.title = element_text(hjust = 0.5),   # ← centers the title
     strip.placement = "outside",
     strip.text.y.left = element_text(angle = 0, size = 8),
     strip.background = element_blank(),
@@ -212,7 +227,8 @@ pdf_height <- n_sites * height_per_site + 2
 
 # Save only (no print)
 ggsave(
-  filename = figure_file,
+  filename = file.path(dirname(rstudioapi::getActiveDocumentContext()$path),
+                       "DailyMeasurementCounts_bySite.pdf"),
   plot = p,
   device = cairo_pdf,
   width = 11,
