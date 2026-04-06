@@ -1,0 +1,61 @@
+---
+title: "CLEANinCLE PM2.5 Data Processing and Completeness Screening"
+filename: CinC_epa_daily_workflow.Rmd
+author: "ASC"
+date: "2026-04-03"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+# Project overview
+
+This notebook serves as a workflow outline and wrapper for processing CLEANinCLE (CinC) PM2.5 data, generating daily summary products, applying completeness screening criteria, and comparing CinC daily averages with EPA FEM daily averages.
+
+The main goals are:
+
+1. Standardize the CinC half-hourly dataset and save it as an `.rds` file.
+2. Generate daily average summary products for both CinC and EPA FEM datasets.
+3. Compute daily completeness metrics for CinC data.
+4. Apply a user-defined completeness threshold during analysis.
+5. Re-run correlations, regressions, and plots using screened data.
+
+This notebook is intended to document the workflow and provide a convenient place to run the scripts in sequence.
+
+# Project structure
+
+Suggested project structure within `Urban-Air-Quality-Project`:
+
+```text
+Urban-Air-Quality-Project/Albert_code_and_output/
+
+Inputs:
+  data/processed/
+    CinC_final_table_v2.csv
+    EPA_FEM_hourlydata.rds
+
+Derived data outputs:
+  data/processed/
+    CinC_halfhourly_pm25.rds
+    CinC_daily_pm25.rds
+    CinC_daily_completeness.rds
+    EPA_daily_pm25.rds
+
+Code:
+  scripts/
+    01_ingest_cinc.R
+    02_make_daily_tables.R
+    03_analysis_plots_correlations.R
+
+Documentation/workflow:
+  notebooks/
+    cinc_epa_daily_workflow.Rmd
+
+```
+
