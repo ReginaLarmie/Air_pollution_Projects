@@ -1,0 +1,12 @@
+step,purpose,output
+0_setup,"Load packages, define folders, date range, and helper functions.",Project folders and helper functions
+1_download_cinc_raw,Download raw CinC data from API and save raw files.,CLEANinCLE_raw_2024-11_to_2025-12.csv/rds
+2_prepare_cinc_pm25,Create PM2.5-only CinC table with clean datetime and numeric PM2.5.,CLEANinCLE_PM25_2024-11_to_2025-12.csv/rds
+3_create_cinc_site_ids,Assign deployment-based CinC Site_ID values based on location changes.,CLEANinCLE_unique_site_table.csv/rds
+4_create_combined_cinc_site_table,Map deployment Site_IDs into final combined CinC site IDs.,cinc_site_table.csv/rds
+5_clean_cinc_data,Apply manual cleaning and trimming decisions from visual inspection.,CinC_final_table_cleaned.csv/rds and CinC_removed_data.csv/rds
+6_screen_cinc_daily_completeness,Apply 36 half-hour measurements/day completeness rule for valid CinC daily averages.,cinc_daily_valid.csv/rds and cinc_daily_screening_summary.csv
+7_download_epa_data,Download EPA PM2.5 data for selected Cuyahoga County sites.,EPA_raw_PM25_2024-11_to_2025-12.csv/rds
+8_screen_epa_daily_completeness,Separate EPA FRM and FEM; apply 18 hourly measurements/day rule for FEM daily averages.,"epa_frm_daily.csv/rds, epa_fem_daily_valid.csv/rds"
+9_create_distance_tables,"Calculate EPA–EPA, CinC–CinC, and EPA–CinC distances.",distance tables
+10_recreate_figures_A_to_E,Recreate Albert’s requested figures A–E using screened data.,"Figures A, B, C, D, and E"
